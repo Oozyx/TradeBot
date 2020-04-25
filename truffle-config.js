@@ -72,12 +72,11 @@ module.exports = {
     //   provider: () => new HDWalletProvider(mnemonic, infuraMainnetEndpoint),
     // },
 
-    // rinkeby: {
-    //   provider: () => new HDWalletProvider(mnemonic, infuraRinkebyEndpoint),
-    //   network_id: 4,
-    //   gas: 4500000,
-    //   gasPrice: 10000000000
-    // }
+    rinkeby: {
+      network_id: 4,
+      gas: 4500000,
+      gasPrice: 10000000000
+    }
     
     // Useful for private networks
     // private: {
