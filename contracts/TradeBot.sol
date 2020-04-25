@@ -1,7 +1,15 @@
 pragma solidity ^0.5.0;
 
-import "../node_modules/@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "../node_modules/@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+contract ERC20 {
+    function totalSupply() public view returns (uint supply);
+    function balanceOf(address _owner) public view returns (uint balance);
+    function transfer(address _to, uint _value) public returns (bool success);
+    function transferFrom(address _from, address _to, uint _value) public returns (bool success);
+    function approve(address _spender, uint _value) public returns (bool success);
+    function allowance(address _owner, address _spender) public view returns (uint remaining);
+    function decimals() public view returns(uint digits);
+    event Approval(address indexed _owner, address indexed _spender, uint _value);
+}
 
 contract UniswapFactoryInterface {
     // Public Variables
@@ -75,8 +83,6 @@ contract KyberNetworkProxyInterface {
 }
 
 contract TradeBot {
-  using SafeERC20 for ERC20;
-
   address internal constant UNISWAP_FACTORY_ADDRESS = 0xf5D915570BC477f9B8D6C0E980aA81757A3AaC36; // Rinkeby
   address internal constant KYBER_PROXY_ADDRESS     = 0xF77eC7Ed5f5B9a5aee4cfa6FFCaC6A4C315BaC76; // Rinkeby
   ERC20   constant internal KYBER_ETH_TOKEN_ADDRESS = ERC20(0x00eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee);
@@ -152,6 +158,6 @@ contract TradeBot {
   function withdrawToken(address tokenAddress) external onlyOwner {
     ERC20 token = ERC20(tokenAddress);
     uint tokenBalance = token.balanceOf(address(this));
-    token.safeTransfer(msg.sender, tokenBalance);
+    token.transfer(msg.sender, tokenBalance);
   }
 }
