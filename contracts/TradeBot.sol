@@ -106,16 +106,34 @@ contract TradeBot {
     kyberProxy = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
   }
 
+  function approveTokenTrade(address tokenAddress) external onlyOwner {
+    ERC20 token = ERC20(tokenAddress);
+    token.approve(address(this), token.balanceOf(msg.sender));
+  }
+
   /*
     Uniswap methods
    */
-  function swapEthForTokenWithUniswap(address tokenAddress) public payable {
+  function swapEthForTokenWithUniswap(address tokenAddress) public onlyOwner payable {
     UniswapExchangeInterface exchange = UniswapExchangeInterface(uniswapFactory.getExchange(tokenAddress));
     uint tokenAmount = exchange.getEthToTokenInputPrice(msg.value);
     exchange.ethToTokenSwapInput.value(msg.value)(
       tokenAmount,
       now
     );
+  }
+
+  function swapTokenForEtherWithUniswap(address tokenAddress) public onlyOwner {
+    UniswapExchangeInterface exchange = UniswapExchangeInterface(uniswapFactory.getExchange(tokenAddress));
+    ERC20 token = ERC20(tokenAddress);
+    uint tokenAmount = token.balanceOf(msg.sender);
+    token.transferFrom(msg.sender, address(this), tokenAmount);
+    uint ethAmount = exchange.getTokenToEthInputPrice(tokenAmount);
+    exchange.tokenToEthSwapInput(
+      tokenAmount,
+      ethAmount,
+      now
+      );
   }
 
   /*
@@ -126,7 +144,7 @@ contract TradeBot {
     return kyberProxy.getExpectedRate(srcToken, destToken, srcQty);
   }
 
-  function swapEthForTokenWithKyber(ERC20 destToken) public payable {
+  function swapEthForTokenWithKyber(ERC20 destToken) public onlyOwner payable {
     uint minConversionRate;
 
     // Get minimum conversion rate
