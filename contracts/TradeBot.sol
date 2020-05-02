@@ -142,13 +142,30 @@ interface IUniswapV2Router01 {
     returns (uint[] memory amounts);
 }
 
+interface KyberNetworkProxyInterface {
+    function maxGasPrice() external view returns(uint);
+    function getUserCapInWei(address user) external view returns(uint);
+    function getUserCapInTokenWei(address user, ERC20 token) external view returns(uint);
+    function enabled() external view returns(bool);
+    function info(bytes32 id) external view returns(uint);
+
+    function getExpectedRate(ERC20 src, ERC20 dest, uint srcQty) external view
+        returns (uint expectedRate, uint slippageRate);
+
+    function tradeWithHint(ERC20 src, uint srcAmount, ERC20 dest, address destAddress, uint maxDestAmount,
+        uint minConversionRate, address walletId, bytes calldata hint) external payable returns(uint);
+}
+
 contract TradeBot {
   address            internal constant  UNISWAP_ROUTER_ADDRESS  = 0xcDbE04934d89e97a24BCc07c3562DC8CF17d8167; // Rinkeby
-  address            internal constant  UNISWAP_FACTORY_ADDRESS = 0xe2f197885abe8ec7c866cFf76605FD06d4576218;
+  address            internal constant  UNISWAP_FACTORY_ADDRESS = 0xe2f197885abe8ec7c866cFf76605FD06d4576218; // Rinkeby
+  address            internal constant  KYBER_PROXY_ADDRESS     = 0xF77eC7Ed5f5B9a5aee4cfa6FFCaC6A4C315BaC76; // Rinkeby
+  address            internal constant  ETH_KYBER_ADDRESS       = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE; 
   uint               internal constant  TOKEN_18_DECIMALS       = (10**18);
   address            public   immutable owner;
   IUniswapV2Factory  public   immutable uniswapFactory;
   IUniswapV2Router01 public   immutable uniswapRouter;
+  KyberNetworkProxyInterface public immutable kyberProxy;
 
   event Log(string log);
   event UniswapTrade(uint inputAmount, uint outputAmount);
@@ -165,17 +182,13 @@ contract TradeBot {
     owner = msg.sender;
     uniswapFactory = IUniswapV2Factory(UNISWAP_FACTORY_ADDRESS);
     uniswapRouter = IUniswapV2Router01(UNISWAP_ROUTER_ADDRESS);
-  }
-
-  function getTokenAmount(address tokenAddress) public view returns(uint) {
-    ERC20 token = ERC20(tokenAddress);
-    return token.balanceOf(address(this));
+    kyberProxy = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
   }
 
   /*
     Uniswap methods
    */
-  function swapEthForTokenWithUniswap(uint ethAmount, address tokenAddress) public onlyOwner {
+  function swapEthForTokenUniswap(address tokenAddress, uint ethAmount) public onlyOwner {
     // Verify we have enough funds
     require(ethAmount * TOKEN_18_DECIMALS <= address(this).balance, "Not enough Eth in contract to perform swap.");
 
@@ -190,7 +203,7 @@ contract TradeBot {
     emit UniswapTrade(result[0], result[1]);
   }
 
-  function swapTokenForEtherWithUniswap(uint tokenAmount, address tokenAddress) public onlyOwner {
+  function swapTokenForEtherUniswap(address tokenAddress, uint tokenAmount) public onlyOwner {
     // Verify we have enough funds
     ERC20 token = ERC20(tokenAddress);
     require(tokenAmount * TOKEN_18_DECIMALS <= token.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
@@ -207,6 +220,50 @@ contract TradeBot {
     uint[] memory result = uniswapRouter.swapExactTokensForETH(tokenAmount * TOKEN_18_DECIMALS, 0, path, address(this), now);
     emit Log("Uniswap token for Eth swap complete.");
     emit UniswapTrade(result[0], result[1]);
+  }
+
+  /*
+    Kyber methods
+   */
+  function swapEthForTokenKyber(address tokenAddress, uint ethAmount) public onlyOwner {
+    require(ethAmount * TOKEN_18_DECIMALS <= address(this).balance, "Not enough Eth in contract to perform swap.");
+
+    // Declare tokens involved in trade
+    ERC20 eth = ERC20(ETH_KYBER_ADDRESS);
+    ERC20 token = ERC20(tokenAddress);
+    
+    // Get the conversion rate
+    uint minConversionRate;
+    uint slippageRate;
+    (minConversionRate, slippageRate) = kyberProxy.getExpectedRate(eth, token, ethAmount * TOKEN_18_DECIMALS);
+    require(minConversionRate != 0 || slippageRate != 0, "Trade is not possible at the moment.");
+
+    // Make the trade. Max amount arbitrarily chosen to be 1 million
+    bytes memory hint;
+    kyberProxy.tradeWithHint{ value: ethAmount * TOKEN_18_DECIMALS }(eth, ethAmount * TOKEN_18_DECIMALS, token, address(this), 10**18 * 10**6, minConversionRate, 0x0000000000000000000000000000000000000004, hint);
+  }
+
+  function swapTokenForEtherKyber(address tokenAddress, uint tokenAmount) public onlyOwner {
+    // Verify we have enough funds
+    ERC20 eth = ERC20(ETH_KYBER_ADDRESS);
+    ERC20 token = ERC20(tokenAddress);
+    require(tokenAmount * TOKEN_18_DECIMALS <= token.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
+
+    // Mitigate ERC20 Approve front-running attack, by initially setting allowance to 0
+    require(token.approve(KYBER_PROXY_ADDRESS, 0), "Failure to approve sender front running attack.");
+
+    // Set the spender's token allowance to tokenQty
+    require(token.approve(KYBER_PROXY_ADDRESS, tokenAmount * TOKEN_18_DECIMALS), "Failure to approve sender for token amount.");
+
+    // Get the conversion rate
+    uint minConversionRate;
+    uint slippageRate;
+    (minConversionRate, slippageRate) = kyberProxy.getExpectedRate(token, eth, tokenAmount * TOKEN_18_DECIMALS);
+    require(minConversionRate != 0 || slippageRate != 0, "Trade is not possible at the moment.");
+
+    // Make the trade. Max amount arbitrarily chosen to be 1 million\
+    bytes memory hint;
+    kyberProxy.tradeWithHint(token, tokenAmount * TOKEN_18_DECIMALS, eth, address(this), 10**18 * 10**6, minConversionRate, 0x0000000000000000000000000000000000000004, hint);
   }
 
   /*
