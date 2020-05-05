@@ -5,7 +5,9 @@ import "./interfaces/IUniswapV2Factory.sol";
 import "./interfaces/IUniswapV2Pair.sol";
 import "./interfaces/IUniswapV2Router01.sol";
 import "./interfaces/KyberNetworkProxyInterface.sol";
+import "./interfaces/ILendingPoolAddressesProvider.sol";
 import "./interfaces/ILendingPool.sol";
+import "./interfaces/AToken.sol";
 
 contract TradeBot {
   /*
@@ -14,16 +16,18 @@ contract TradeBot {
   address private constant  UNISWAP_ROUTER_ADDRESS  = 0xcDbE04934d89e97a24BCc07c3562DC8CF17d8167; // Rinkeby
   address private constant  UNISWAP_FACTORY_ADDRESS = 0xe2f197885abe8ec7c866cFf76605FD06d4576218; // Rinkeby
   address private constant  KYBER_PROXY_ADDRESS     = 0xF77eC7Ed5f5B9a5aee4cfa6FFCaC6A4C315BaC76; // Rinkeby
-  address private constant  ETH_MOCK_ADDRESS       = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+  address private constant  ETH_MOCK_ADDRESS        = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+  address private constant  AAVE_ADDRESSES_PROVIDER = 0x1c8756FD2B28e9426CDBDcC7E3c4d64fa9A54728; // Ropsten
   uint    private constant  TOKEN_18_DECIMALS       = (10**18);
   
   /*
     Members
   */
-  address                    private immutable owner;
-  IUniswapV2Factory          private immutable uniswapFactory;
-  IUniswapV2Router01         private immutable uniswapRouter;
-  KyberNetworkProxyInterface private immutable kyberProxy;
+  address                       private immutable owner;
+  IUniswapV2Factory             private immutable uniswapFactory;
+  IUniswapV2Router01            private immutable uniswapRouter;
+  KyberNetworkProxyInterface    private immutable kyberProxy;
+  ILendingPoolAddressesProvider private immutable aaveAddressesProvider;
 
   /*
     Events
@@ -46,15 +50,64 @@ contract TradeBot {
   */
   constructor() public {
     owner = msg.sender;
-    uniswapFactory = IUniswapV2Factory(UNISWAP_FACTORY_ADDRESS);
-    uniswapRouter = IUniswapV2Router01(UNISWAP_ROUTER_ADDRESS);
-    kyberProxy = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
+    uniswapFactory        = IUniswapV2Factory(UNISWAP_FACTORY_ADDRESS);
+    uniswapRouter         = IUniswapV2Router01(UNISWAP_ROUTER_ADDRESS);
+    kyberProxy            = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
+    aaveAddressesProvider = ILendingPoolAddressesProvider(AAVE_ADDRESSES_PROVIDER);
   }
 
   /*
     Aave methods
   */
-  
+  function depositEthAave(uint ethAmount) public onlyOwner {
+    // Verify we have enough funds
+    require(ethAmount * TOKEN_18_DECIMALS <= address(this).balance, "Not enough Eth in contract to deposit into Aave.");
+
+    // Make the call
+    ILendingPool lendingPool = ILendingPool(aaveAddressesProvider.getLendingPool());
+    lendingPool.deposit{ value: ethAmount * TOKEN_18_DECIMALS }(ETH_MOCK_ADDRESS, ethAmount * TOKEN_18_DECIMALS, 0);
+  }
+
+  function withdrawEthAave(uint ethAmount) public onlyOwner {
+    // Get the aToken address
+    address aTokenEthAddress;
+    ILendingPool lendingPool = ILendingPool(aaveAddressesProvider.getLendingPool());
+    (,,,,,,,,,,, aTokenEthAddress,) = lendingPool.getReserveData(ETH_MOCK_ADDRESS);
+
+    // Verify if the withdrawal is allowed
+    AToken aTokenEth = AToken(aTokenEthAddress);
+    require(aTokenEth.isTransferAllowed(address(this), ethAmount * TOKEN_18_DECIMALS), "Withdrawal is not allowed.");
+
+    // Make the call
+    aTokenEth.redeem(ethAmount * TOKEN_18_DECIMALS);
+  }
+
+  function depositTokenAave(address tokenAddress, uint tokenAmount) public onlyOwner {
+    // Verify we have enough funds
+    ERC20 token = ERC20(tokenAddress);
+    require(tokenAmount * TOKEN_18_DECIMALS <= token.balanceOf(address(this)), "Not enough tokens in contract to deposit.");
+
+    // Give approval to Aave to transfer my tokens
+    ILendingPool lendingPool = ILendingPool(aaveAddressesProvider.getLendingPool());
+    token.approve(address(lendingPool), tokenAmount * TOKEN_18_DECIMALS);
+
+    // Make the call
+    lendingPool.deposit(tokenAddress, tokenAmount * TOKEN_18_DECIMALS, 0);
+  }
+
+  function withdrawTokenAave(address tokenAddress, uint tokenAmount) public onlyOwner {
+    // Get the aToken address
+    address aTokenAddress;
+    ILendingPool lendingPool = ILendingPool(aaveAddressesProvider.getLendingPool());
+    (,,,,,,,,,,, aTokenAddress,) = lendingPool.getReserveData(tokenAddress);
+
+    // Verify if the withdrawal is allowed
+    AToken atoken = AToken(aTokenAddress);
+    require(atoken.isTransferAllowed(address(this), tokenAmount * TOKEN_18_DECIMALS), "Withdrawal is not allowed.");
+
+    // Make the call
+    atoken.redeem(tokenAmount * TOKEN_18_DECIMALS);
+  }
 
   /*
     Uniswap methods
