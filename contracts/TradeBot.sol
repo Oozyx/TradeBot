@@ -176,6 +176,16 @@ contract TradeBot {
   /*
     Kyber methods
   */
+  function getMinConversionRateKyber() public view returns (uint) {
+    // Testing this function with KNC
+    ERC20 token = ERC20(0x6FA355a7b6bD2D6bD8b927C489221BFBb6f1D7B2);
+    ERC20 eth = ERC20(ETH_MOCK_ADDRESS);
+
+    uint minConversionRate;
+    (minConversionRate, ) = kyberProxy.getExpectedRate(eth, token, TOKEN_18_DECIMALS);
+    return minConversionRate;
+  }
+
   function swapEthForTokenKyber(address tokenAddress, uint ethAmount) public onlyOwner returns (uint) {
     require(ethAmount <= address(this).balance, "Not enough Eth in contract to perform swap.");
 
