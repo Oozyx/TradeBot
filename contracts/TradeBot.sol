@@ -8,6 +8,7 @@ import "./interfaces/KyberNetworkProxyInterface.sol";
 import "./interfaces/ILendingPoolAddressesProvider.sol";
 import "./interfaces/ILendingPool.sol";
 import "./interfaces/AToken.sol";
+import "./interfaces/OrFeedInterface.sol";
 
 contract TradeBot {
   /*
@@ -18,6 +19,7 @@ contract TradeBot {
   address private constant  KYBER_PROXY_ADDRESS     = 0xF77eC7Ed5f5B9a5aee4cfa6FFCaC6A4C315BaC76; // Rinkeby
   address private constant  ETH_MOCK_ADDRESS        = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
   address private constant  AAVE_ADDRESSES_PROVIDER = 0x1c8756FD2B28e9426CDBDcC7E3c4d64fa9A54728; // Ropsten
+  address private constant  ORFEED_ADDRESS          = 0xB215bF00E18825667f696833d13368092CF62E66; // Rinkeby
   uint    private constant  TOKEN_18_DECIMALS       = (10**18);
   
   /*
@@ -28,11 +30,15 @@ contract TradeBot {
   IUniswapV2Router01            private immutable uniswapRouter;
   KyberNetworkProxyInterface    private immutable kyberProxy;
   ILendingPoolAddressesProvider private immutable aaveAddressesProvider;
+  OrFeedInterface               private immutable orfeed;
+
+  mapping(address => string)    public  orfeedAssets;
 
   /*
     Events
   */
   event Log(string log);
+  event Log(uint log);
 
   /*
     Modifiers
@@ -54,6 +60,11 @@ contract TradeBot {
     uniswapRouter         = IUniswapV2Router01(UNISWAP_ROUTER_ADDRESS);
     kyberProxy            = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
     aaveAddressesProvider = ILendingPoolAddressesProvider(AAVE_ADDRESSES_PROVIDER);
+    orfeed                = OrFeedInterface(ORFEED_ADDRESS);
+
+    // Initialize orfeed assets with basic assets
+    addOrfeedAsset(ETH_MOCK_ADDRESS, "ETH");
+    addOrfeedAsset(0xc7AD46e0b8a400Bb3C915120d284AafbA8fc4735, "DAI"); // Rinkeby DAI
   }
 
   /*
@@ -61,11 +72,11 @@ contract TradeBot {
   */
   function depositEthAave(uint ethAmount) public onlyOwner {
     // Verify we have enough funds
-    require(ethAmount * TOKEN_18_DECIMALS <= address(this).balance, "Not enough Eth in contract to deposit into Aave.");
+    require(ethAmount <= address(this).balance, "Not enough Eth in contract to deposit into Aave.");
 
     // Make the call
     ILendingPool lendingPool = ILendingPool(aaveAddressesProvider.getLendingPool());
-    lendingPool.deposit{ value: ethAmount * TOKEN_18_DECIMALS }(ETH_MOCK_ADDRESS, ethAmount * TOKEN_18_DECIMALS, 0);
+    lendingPool.deposit{ value: ethAmount }(ETH_MOCK_ADDRESS, ethAmount, 0);
   }
 
   function withdrawEthAave(uint ethAmount) public onlyOwner {
@@ -76,23 +87,23 @@ contract TradeBot {
 
     // Verify if the withdrawal is allowed
     AToken aTokenEth = AToken(aTokenEthAddress);
-    require(aTokenEth.isTransferAllowed(address(this), ethAmount * TOKEN_18_DECIMALS), "Withdrawal is not allowed.");
+    require(aTokenEth.isTransferAllowed(address(this), ethAmount), "Withdrawal is not allowed.");
 
     // Make the call
-    aTokenEth.redeem(ethAmount * TOKEN_18_DECIMALS);
+    aTokenEth.redeem(ethAmount);
   }
 
   function depositTokenAave(address tokenAddress, uint tokenAmount) public onlyOwner {
     // Verify we have enough funds
     ERC20 token = ERC20(tokenAddress);
-    require(tokenAmount * TOKEN_18_DECIMALS <= token.balanceOf(address(this)), "Not enough tokens in contract to deposit.");
+    require(tokenAmount <= token.balanceOf(address(this)), "Not enough tokens in contract to deposit.");
 
     // Give approval to Aave to transfer my tokens
     ILendingPool lendingPool = ILendingPool(aaveAddressesProvider.getLendingPool());
-    token.approve(address(lendingPool), tokenAmount * TOKEN_18_DECIMALS);
+    token.approve(address(lendingPool), tokenAmount);
 
     // Make the call
-    lendingPool.deposit(tokenAddress, tokenAmount * TOKEN_18_DECIMALS, 0);
+    lendingPool.deposit(tokenAddress, tokenAmount, 0);
   }
 
   function withdrawTokenAave(address tokenAddress, uint tokenAmount) public onlyOwner {
@@ -103,18 +114,28 @@ contract TradeBot {
 
     // Verify if the withdrawal is allowed
     AToken atoken = AToken(aTokenAddress);
-    require(atoken.isTransferAllowed(address(this), tokenAmount * TOKEN_18_DECIMALS), "Withdrawal is not allowed.");
+    require(atoken.isTransferAllowed(address(this), tokenAmount), "Withdrawal is not allowed.");
 
     // Make the call
-    atoken.redeem(tokenAmount * TOKEN_18_DECIMALS);
+    atoken.redeem(tokenAmount);
   }
 
   /*
     Uniswap methods
   */
-  function swapEthForTokenUniswap(address tokenAddress, uint ethAmount) public onlyOwner {
+  function addLiquidityUniswap(address tokenAddress, uint tokenAmount, uint ethAmount) public onlyOwner {
+    ERC20 token = ERC20(tokenAddress);
+    require(tokenAmount <= token.balanceOf(address(this)), "Not enough tokens in contract to add liquidity.");
+    require(ethAmount <= address(this).balance, "Not enough Eth in contract to add liquidity.");
+
+    token.approve(address(uniswapRouter), token.balanceOf(address(this)));
+
+    uniswapRouter.addLiquidityETH{ value: ethAmount }(tokenAddress, tokenAmount, tokenAmount, ethAmount, msg.sender, now);
+  }
+
+  function swapEthForTokenUniswap(address tokenAddress, uint ethAmount) public onlyOwner returns (uint) {
     // Verify we have enough funds
-    require(ethAmount * TOKEN_18_DECIMALS <= address(this).balance, "Not enough Eth in contract to perform swap.");
+    require(ethAmount <= address(this).balance, "Not enough Eth in contract to perform swap.");
 
     // Build arguments for uniswap router call
     address[] memory path = new address[](2);
@@ -122,13 +143,14 @@ contract TradeBot {
     path[1] = tokenAddress;
 
     // Make the call
-    uniswapRouter.swapExactETHForTokens{ value: ethAmount * TOKEN_18_DECIMALS }(0, path, address(this), now);
+    uint[] memory result = uniswapRouter.swapExactETHForTokens{ value: ethAmount }(0, path, address(this), now);
+    return result[1]; // Returns the output amount
   }
 
-  function swapTokenForEtherUniswap(address tokenAddress, uint tokenAmount) public onlyOwner {
+  function swapTokenForEtherUniswap(address tokenAddress, uint tokenAmount) public onlyOwner returns (uint) {
     // Verify we have enough funds
     ERC20 token = ERC20(tokenAddress);
-    require(tokenAmount * TOKEN_18_DECIMALS <= token.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
+    require(tokenAmount <= token.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
 
     // Approve uniswap to manage contract tokens
     token.approve(address(uniswapRouter), token.balanceOf(address(this)));
@@ -139,14 +161,23 @@ contract TradeBot {
     path[1] = uniswapRouter.WETH();
 
     // Make the call
-    uniswapRouter.swapExactTokensForETH(tokenAmount * TOKEN_18_DECIMALS, 0, path, address(this), now);
+    uint[] memory result = uniswapRouter.swapExactTokensForETH(tokenAmount, 0, path, address(this), now);
+    return result[1]; // Returns the output amount
+  }
+
+  function getEthBuyPriceUniswap(uint ethAmount) public view returns (uint) {
+    return orfeed.getExchangeRate("ETH", "DAI", "BUY-UNISWAP-EXCHANGE", ethAmount);
+  }
+
+  function getEthSellPriceUniswap(uint ethAmount) public view returns (uint) {
+    return orfeed.getExchangeRate("ETH", "DAI", "SELL-UNISWAP-EXCHANGE", ethAmount);
   }
 
   /*
     Kyber methods
   */
-  function swapEthForTokenKyber(address tokenAddress, uint ethAmount) public onlyOwner {
-    require(ethAmount * TOKEN_18_DECIMALS <= address(this).balance, "Not enough Eth in contract to perform swap.");
+  function swapEthForTokenKyber(address tokenAddress, uint ethAmount) public onlyOwner returns (uint) {
+    require(ethAmount <= address(this).balance, "Not enough Eth in contract to perform swap.");
 
     // Declare tokens involved in trade
     ERC20 eth = ERC20(ETH_MOCK_ADDRESS);
@@ -155,35 +186,85 @@ contract TradeBot {
     // Get the conversion rate
     uint minConversionRate;
     uint slippageRate;
-    (minConversionRate, slippageRate) = kyberProxy.getExpectedRate(eth, token, ethAmount * TOKEN_18_DECIMALS);
+    (minConversionRate, slippageRate) = kyberProxy.getExpectedRate(eth, token, ethAmount);
     require(minConversionRate != 0 || slippageRate != 0, "Trade is not possible at the moment.");
 
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
-    kyberProxy.tradeWithHint{ value: ethAmount * TOKEN_18_DECIMALS }(eth, ethAmount * TOKEN_18_DECIMALS, token, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
+    return kyberProxy.tradeWithHint{ value: ethAmount }(eth, ethAmount, token, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
   }
 
-  function swapTokenForEtherKyber(address tokenAddress, uint tokenAmount) public onlyOwner {
+  function swapTokenForEtherKyber(address tokenAddress, uint tokenAmount) public onlyOwner returns (uint) {
     // Verify we have enough funds
     ERC20 eth = ERC20(ETH_MOCK_ADDRESS);
     ERC20 token = ERC20(tokenAddress);
-    require(tokenAmount * TOKEN_18_DECIMALS <= token.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
+    require(tokenAmount <= token.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
 
     // Mitigate ERC20 Approve front-running attack, by initially setting allowance to 0
     require(token.approve(KYBER_PROXY_ADDRESS, 0), "Failure to approve sender front running attack.");
 
     // Set the spender's token allowance to tokenQty
-    require(token.approve(KYBER_PROXY_ADDRESS, tokenAmount * TOKEN_18_DECIMALS), "Failure to approve sender for token amount.");
+    require(token.approve(KYBER_PROXY_ADDRESS, tokenAmount), "Failure to approve sender for token amount.");
 
     // Get the conversion rate
     uint minConversionRate;
     uint slippageRate;
-    (minConversionRate, slippageRate) = kyberProxy.getExpectedRate(token, eth, tokenAmount * TOKEN_18_DECIMALS);
+    (minConversionRate, slippageRate) = kyberProxy.getExpectedRate(token, eth, tokenAmount);
     require(minConversionRate != 0 || slippageRate != 0, "Trade is not possible at the moment.");
 
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
-    kyberProxy.tradeWithHint(token, tokenAmount * TOKEN_18_DECIMALS, eth, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
+    return kyberProxy.tradeWithHint(token, tokenAmount, eth, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
+  }
+
+  function getEthBuyPriceKyber(uint ethAmount) public view returns (uint) {
+    return orfeed.getExchangeRate("ETH", "DAI", "BUY-KYBER-EXCHANGE", ethAmount);
+  }
+
+  function getEthSellPriceKyber(uint ethAmount) public view returns (uint) {
+    return orfeed.getExchangeRate("ETH", "DAI", "SELL-KYBER-EXCHANGE", ethAmount);
+  }
+
+  /*
+    Orfeed methods
+  */
+  function addOrfeedAsset(address assetAddress, string memory assetName) internal {
+    orfeedAssets[assetAddress] = assetName;
+  }
+
+  /*
+    Arbitrage methods
+  */
+  function ethSellUniswapBuyKyber(address mediatorToken, uint ethAmount) public onlyOwner {
+    emit Log("Starting amount of Eth:");
+    emit Log(ethAmount);
+
+    // Make sure we have enough eth to perform the trade
+    require(ethAmount <= address(this).balance, "Not enough Eth in contract to perform trade.");
+
+    // Sell on Uniswap
+    uint tokenAmount = swapEthForTokenUniswap(mediatorToken, ethAmount);
+
+    // Buy on Kyber
+    uint newEthAmount = swapTokenForEtherKyber(mediatorToken, tokenAmount);
+    emit Log("New amount of Eth:");
+    emit Log(newEthAmount);
+  }
+
+  function ethSellKyberBuyUniswap(address mediatorToken, uint ethAmount) public onlyOwner {
+    emit Log("Starting amount of Eth:");
+    emit Log(ethAmount);
+
+    // Make sure we have enough eth to perform the trade
+    require(ethAmount <= address(this).balance, "Not enough Eth in contract to perform trade.");
+
+    // Sell on Kyber
+    uint tokenAmount = swapEthForTokenKyber(mediatorToken, ethAmount);
+
+    // Buy on Uniswap
+    uint newEthAmount = swapTokenForEtherUniswap(mediatorToken, tokenAmount);
+    emit Log("New amount of Eth:");
+    emit Log(newEthAmount);
   }
 
   /*
