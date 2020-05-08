@@ -1,4 +1,0 @@
-rinkeby uniswap testnet: https://hackmd.io/SHPZJPSUTSW8se71CP_TBA
-doc: https://github.com/Uniswap/uniswap-v1/blob/master/contracts/uniswap_exchange.vy
-kyber example: https://github.com/KyberNetwork/workshop/blob/master/contracts/examples/Trade.sol
-kyber doc: https://developer.kyber.network/docs/Start/

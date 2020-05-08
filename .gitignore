@@ -5,3 +5,5 @@ bin
 /solidity-flattener/*
 .privatekey
 .contractinfo
+online_resources.txt
+/.vscode/*
