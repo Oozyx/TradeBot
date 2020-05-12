@@ -1,16 +1,18 @@
 pragma solidity ^0.6.0;
 
-import "./interfaces/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "./interfaces/IUniswapV2Factory.sol";
 import "./interfaces/IUniswapV2Pair.sol";
 import "./interfaces/IUniswapV2Router01.sol";
 import "./interfaces/KyberNetworkProxyInterface.sol";
+import "./interfaces/FlashLoanReceiverBase.sol";
 import "./interfaces/ILendingPoolAddressesProvider.sol";
 import "./interfaces/ILendingPool.sol";
 import "./interfaces/AToken.sol";
 import "./interfaces/OrFeedInterface.sol";
+import "./utils/Seriality.sol";
 
-contract TradeBot {
+contract TradeBot is FlashLoanReceiverBase, Seriality {
   /*
     Constants
   */
@@ -22,15 +24,15 @@ contract TradeBot {
   address private constant  AAVE_ADDRESSES_PROVIDER = 0x1c8756FD2B28e9426CDBDcC7E3c4d64fa9A54728; // Ropsten
   address private constant  ORFEED_ADDRESS          = 0xB215bF00E18825667f696833d13368092CF62E66; // Rinkeby
   uint    private constant  TOKEN_18_DECIMALS       = (10**18);
+  uint    private constant  ARB_COMMAND_BUF_SIZE    = 84;
   
   /*
     Members
   */
-  address                       private immutable owner;
+  // address                       private immutable owner;
   IUniswapV2Factory             private immutable uniswapFactory;
   IUniswapV2Router01            private immutable uniswapRouter;
   KyberNetworkProxyInterface    private immutable kyberProxy;
-  ILendingPoolAddressesProvider private immutable aaveAddressesProvider;
   OrFeedInterface               private immutable orfeed;
 
   mapping(address => string)    public  orfeedAssets;
@@ -42,30 +44,68 @@ contract TradeBot {
   event Log(uint log);
 
   /*
-    Modifiers
-  */
-  modifier onlyOwner() {
-    require (
-      msg.sender == owner,
-      "Only owner can call this function."
-    );
-    _;
-  }
-
-  /*
     Constructors
   */
-  constructor() public {
-    owner = msg.sender;
+  constructor() FlashLoanReceiverBase(AAVE_ADDRESSES_PROVIDER) public {
     uniswapFactory        = IUniswapV2Factory(UNISWAP_FACTORY_ADDRESS);
     uniswapRouter         = IUniswapV2Router01(UNISWAP_ROUTER_ADDRESS);
     kyberProxy            = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
-    aaveAddressesProvider = ILendingPoolAddressesProvider(AAVE_ADDRESSES_PROVIDER);
     orfeed                = OrFeedInterface(ORFEED_ADDRESS);
 
     // Initialize orfeed assets with basic assets
     addOrfeedAsset(ETH_MOCK_ADDRESS, "ETH");
     addOrfeedAsset(DAI_ADDRESS, "DAI"); // Rinkeby DAI
+  }
+
+  /*
+    Arbitrage Struct
+  */
+  struct ArbitrageParameters {
+    address mediatorCoin;
+    string  sellDex;
+    string  buyDex;
+  }
+
+  function serializeArbitrageParameters(ArbitrageParameters memory command) internal pure returns (bytes memory) {
+    uint bufferSize = ARB_COMMAND_BUF_SIZE;
+    uint offset = bufferSize;
+    bytes memory buffer = new bytes(bufferSize);
+
+    addressToBytes(offset, command.mediatorCoin, buffer);
+    offset -= sizeOfAddress();
+
+    string memory tempSell = new string(32);
+    tempSell = command.sellDex;
+    stringToBytes(offset, bytes(tempSell), buffer);
+    offset -= sizeOfString(tempSell);
+
+    string memory tempBuy = new string(32);
+    tempBuy = command.buyDex;
+    stringToBytes(offset, bytes(tempBuy), buffer);
+    offset -= sizeOfString(tempBuy);
+
+    return buffer;
+  }
+
+  function deserializeArbitrageParameters(bytes memory buffer) internal pure returns (ArbitrageParameters memory) {
+    uint bufferSize = ARB_COMMAND_BUF_SIZE;
+    uint offset = bufferSize;
+    ArbitrageParameters memory command;
+
+    command.mediatorCoin = bytesToAddress(offset, buffer);
+    offset -= sizeOfAddress();
+
+    string memory tempSell = new string(32);
+    bytesToString(offset, buffer, bytes(tempSell));
+    offset -= sizeOfString(tempSell);
+    command.sellDex = tempSell;
+
+    string memory tempBuy = new string(32);
+    bytesToString(offset, buffer, bytes(tempBuy));
+    offset -= sizeOfString(tempBuy);
+    command.buyDex = tempBuy;
+
+    return command;
   }
 
   /*
@@ -76,14 +116,14 @@ contract TradeBot {
     require(ethAmount <= address(this).balance, "Not enough Eth in contract to deposit into Aave.");
 
     // Make the call
-    ILendingPool lendingPool = ILendingPool(aaveAddressesProvider.getLendingPool());
+    ILendingPool lendingPool = ILendingPool(addressesProvider.getLendingPool());
     lendingPool.deposit{ value: ethAmount }(ETH_MOCK_ADDRESS, ethAmount, 0);
   }
 
   function withdrawEthAave(uint ethAmount) public onlyOwner {
     // Get the aToken address
     address aTokenEthAddress;
-    ILendingPool lendingPool = ILendingPool(aaveAddressesProvider.getLendingPool());
+    ILendingPool lendingPool = ILendingPool(addressesProvider.getLendingPool());
     (,,,,,,,,,,, aTokenEthAddress,) = lendingPool.getReserveData(ETH_MOCK_ADDRESS);
 
     // Verify if the withdrawal is allowed
@@ -100,7 +140,7 @@ contract TradeBot {
     require(tokenAmount <= token.balanceOf(address(this)), "Not enough tokens in contract to deposit.");
 
     // Give approval to Aave to transfer my tokens
-    ILendingPool lendingPool = ILendingPool(aaveAddressesProvider.getLendingPool());
+    ILendingPool lendingPool = ILendingPool(addressesProvider.getLendingPool());
     token.approve(address(lendingPool), tokenAmount);
 
     // Make the call
@@ -110,7 +150,7 @@ contract TradeBot {
   function withdrawTokenAave(address tokenAddress, uint tokenAmount) public onlyOwner {
     // Get the aToken address
     address aTokenAddress;
-    ILendingPool lendingPool = ILendingPool(aaveAddressesProvider.getLendingPool());
+    ILendingPool lendingPool = ILendingPool(addressesProvider.getLendingPool());
     (,,,,,,,,,,, aTokenAddress,) = lendingPool.getReserveData(tokenAddress);
 
     // Verify if the withdrawal is allowed
@@ -119,6 +159,22 @@ contract TradeBot {
 
     // Make the call
     atoken.redeem(tokenAmount);
+  }
+
+  function executeOperation(address _reserve, uint256 _amount, uint256 _fee, bytes calldata _params) external override {
+    require(_amount <= getBalanceInternal(address(this), _reserve), "Invalid balance, was the flashLoan successful?");
+
+    // Deserialize the parameters
+    ArbitrageParameters memory parameters = deserializeArbitrageParameters(_params);
+
+    if (keccak256(bytes(parameters.sellDex)) == keccak256("UNI") && keccak256(bytes(parameters.buyDex)) == keccak256("KYB")) {
+      arbSellUniswapBuyKyber(_reserve, parameters.mediatorCoin, _amount);
+    } else if (keccak256(bytes(parameters.sellDex)) == keccak256("KYB") && keccak256(bytes(parameters.buyDex)) == keccak256("UNI")) {
+      arbSellKyberBuyUniswap(_reserve, parameters.mediatorCoin, _amount);
+    }
+
+    uint totalDebt = _amount.add(_fee);
+    transferFundsBackToPoolInternal(_reserve, totalDebt);
   }
 
   /*
@@ -259,28 +315,12 @@ contract TradeBot {
     orfeedAssets[assetAddress] = assetName;
   }
 
-  function getEthBuyPriceUniswap(uint ethAmount) public view returns (uint) {
-    return orfeed.getExchangeRate("ETH", "DAI", "BUY-UNISWAP-EXCHANGE", ethAmount);
-  }
-
-  function getEthSellPriceUniswap(uint ethAmount) public view returns (uint) {
-    return orfeed.getExchangeRate("ETH", "DAI", "SELL-UNISWAP-EXCHANGE", ethAmount);
-  }
-
   function getTokenBuyPriceUniswap(address tokenAddress, uint tokenAmount) public view returns (uint) {
     return orfeed.getExchangeRate(orfeedAssets[tokenAddress], "DAI", "BUY-UNISWAP-EXCHANGE", tokenAmount);
   }
 
   function getTokenSellPriceUniswap(address tokenAddress, uint tokenAmount) public view returns (uint) {
     return orfeed.getExchangeRate(orfeedAssets[tokenAddress], "DAI", "SELL-UNISWAP-EXCHANGE", tokenAmount);
-  }
-
-  function getEthBuyPriceKyber(uint ethAmount) public view returns (uint) {
-    return orfeed.getExchangeRate("ETH", "DAI", "BUY-KYBER-EXCHANGE", ethAmount);
-  }
-
-  function getEthSellPriceKyber(uint ethAmount) public view returns (uint) {
-    return orfeed.getExchangeRate("ETH", "DAI", "SELL-KYBER-EXCHANGE", ethAmount);
   }
 
   function getTokenBuyPriceKyber(address tokenAddress, uint tokenAmount) public view returns (uint) {
@@ -294,6 +334,21 @@ contract TradeBot {
   /*
     Arbitrage methods
   */
+  function arbExecute(address stableCoin, address mediatorCoin, uint amount, string memory sellDex, string memory buyDex) public onlyOwner {
+    // Create Arb command
+    ArbitrageParameters memory parameters;
+    parameters.mediatorCoin = mediatorCoin;
+    parameters.sellDex = sellDex;
+    parameters.buyDex = buyDex;
+
+    // Serialize the command
+    bytes memory serializedCommand = serializeArbitrageParameters(parameters);
+
+    // Call the flash loan function from Aave
+    ILendingPool lendingPool = ILendingPool(addressesProvider.getLendingPool());
+    lendingPool.flashLoan(address(this), stableCoin, amount, serializedCommand);
+  }
+
   function arbSellUniswapBuyKyber(address tokenAddress, address mediatorAddress, uint tokenAmount) public onlyOwner {
     // Make sure we have enough tokens to perform the trade
     ERC20 token = ERC20(tokenAddress);
@@ -352,9 +407,5 @@ contract TradeBot {
   function withdrawToken(address tokenAddress) external onlyOwner {
     ERC20 token = ERC20(tokenAddress);
     token.transfer(msg.sender, token.balanceOf(address(this)));
-  }
-
-  receive() external payable {
-    // Nothing to do
   }
 }
