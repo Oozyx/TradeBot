@@ -7,6 +7,7 @@ import "./interfaces/IUniswapV2Router01.sol";
 import "./interfaces/KyberNetworkProxyInterface.sol";
 import "./interfaces/FlashLoanReceiverBase.sol";
 import "./interfaces/ILendingPool.sol";
+import "./libs/UniswapV2Library.sol";
 
 contract TradeBot is FlashLoanReceiverBase {
   /*
@@ -44,6 +45,20 @@ contract TradeBot is FlashLoanReceiverBase {
   /*
     Uniswap methods
   */
+  function getAmountOutUniswap(address fromToken, address toToken, uint fromTokenAmount) public view returns (uint) {
+    uint fromTokenReserves;
+    uint toTokenReserves;
+    if (fromToken == ETH_MOCK_ADDRESS) {
+      fromToken = uniswapRouter.WETH();
+    }
+    if (toToken == ETH_MOCK_ADDRESS) {
+      toToken = uniswapRouter.WETH();
+    }
+    (fromTokenReserves, toTokenReserves) = UniswapV2Library.getReserves(UNISWAP_FACTORY_ADDRESS, fromToken, toToken);
+
+    return UniswapV2Library.getAmountOut(fromTokenAmount, fromTokenReserves, toTokenReserves);
+  }
+
   function swapEthForTokenUniswap(address tokenAddress, uint ethAmount) internal returns (uint) {
     // Verify we have enough funds
     require(ethAmount <= address(this).balance, "Not enough Eth in contract to perform swap.");
@@ -105,6 +120,13 @@ contract TradeBot is FlashLoanReceiverBase {
   /*
     Kyber methods
   */
+  function getAmountOutKyber(address fromToken, address toToken, uint fromTokenAmount) public view returns (uint) {
+    uint rate;
+    (rate,) = kyberProxy.getExpectedRate(ERC20(fromToken), ERC20(toToken), fromTokenAmount);
+    uint amountOut = fromTokenAmount.mul(rate);
+    return amountOut.div(1000000000000000000);
+  }
+
   function swapEthForTokenKyber(address tokenAddress, uint ethAmount) internal returns (uint) {
     require(ethAmount <= address(this).balance, "Not enough Eth in contract to perform swap.");
 
@@ -114,9 +136,8 @@ contract TradeBot is FlashLoanReceiverBase {
     
     // Get the conversion rate
     uint minConversionRate;
-    uint slippageRate;
-    (minConversionRate, slippageRate) = kyberProxy.getExpectedRate(eth, token, ethAmount);
-    require(minConversionRate != 0 || slippageRate != 0, "Trade is not possible at the moment.");
+    (minConversionRate, ) = kyberProxy.getExpectedRate(eth, token, ethAmount);
+    require(minConversionRate != 0, "Trade is not possible at the moment.");
 
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
@@ -137,9 +158,8 @@ contract TradeBot is FlashLoanReceiverBase {
 
     // Get the conversion rate
     uint minConversionRate;
-    uint slippageRate;
-    (minConversionRate, slippageRate) = kyberProxy.getExpectedRate(token, eth, tokenAmount);
-    require(minConversionRate != 0 || slippageRate != 0, "Trade is not possible at the moment.");
+    (minConversionRate, ) = kyberProxy.getExpectedRate(token, eth, tokenAmount);
+    require(minConversionRate != 0, "Trade is not possible at the moment.");
 
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
@@ -169,9 +189,8 @@ contract TradeBot is FlashLoanReceiverBase {
 
     // Get the conversion rate
     uint minConversionRate;
-    uint slippageRate;
-    (minConversionRate, slippageRate) = kyberProxy.getExpectedRate(fromToken, toToken, tokenAmount);
-    require(minConversionRate != 0 || slippageRate != 0, "Trade is not possible at the moment.");
+    (minConversionRate, ) = kyberProxy.getExpectedRate(fromToken, toToken, tokenAmount);
+    require(minConversionRate != 0, "Trade is not possible at the moment.");
 
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
