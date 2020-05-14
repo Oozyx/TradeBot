@@ -13,19 +13,19 @@ contract TradeBot is FlashLoanReceiverBase {
   /*
     Constants
   */
-  address private constant  UNISWAP_FACTORY_ADDRESS = 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f; // Ropsten
-  address private constant  UNISWAP_ROUTER_ADDRESS  = 0xf164fC0Ec4E93095b804a4795bBe1e041497b92a; // Ropsten
-  address private constant  KYBER_PROXY_ADDRESS     = 0x818E6FECD516Ecc3849DAf6845e3EC868087B755; // Ropsten
-  address private constant  ETH_MOCK_ADDRESS        = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-  address private constant  AAVE_ADDRESSES_PROVIDER = 0x1c8756FD2B28e9426CDBDcC7E3c4d64fa9A54728; // Ropsten
+  address internal constant  UNISWAP_FACTORY_ADDRESS = 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f; // Ropsten
+  address internal constant  UNISWAP_ROUTER_ADDRESS  = 0xf164fC0Ec4E93095b804a4795bBe1e041497b92a; // Ropsten
+  address internal constant  KYBER_PROXY_ADDRESS     = 0x818E6FECD516Ecc3849DAf6845e3EC868087B755; // Ropsten
+  address internal constant  ETH_MOCK_ADDRESS        = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+  address internal constant  AAVE_ADDRESSES_PROVIDER = 0x1c8756FD2B28e9426CDBDcC7E3c4d64fa9A54728; // Ropsten
   
   /*
     Members
   */
-  IUniswapV2Factory             private immutable uniswapFactory;
-  IUniswapV2Router01            private immutable uniswapRouter;
-  KyberNetworkProxyInterface    private immutable kyberProxy;
-  ILendingPool                  private immutable lendingPool;
+  IUniswapV2Factory             internal immutable uniswapFactory;
+  IUniswapV2Router01            internal immutable uniswapRouter;
+  KyberNetworkProxyInterface    internal immutable kyberProxy;
+  ILendingPool                  internal immutable lendingPool;
 
   /*
     Events
@@ -45,7 +45,7 @@ contract TradeBot is FlashLoanReceiverBase {
   /*
     Uniswap methods
   */
-  function getAmountOutUniswap(address fromToken, address toToken, uint fromTokenAmount) public view returns (uint) {
+  function getAmountOutUniswap(address fromToken, address toToken, uint fromTokenAmount) external view returns (uint) {
     uint fromTokenReserves;
     uint toTokenReserves;
     if (fromToken == ETH_MOCK_ADDRESS) {
@@ -91,7 +91,7 @@ contract TradeBot is FlashLoanReceiverBase {
     return result[1]; // Returns the output amount
   }
 
-  function swapTokenForTokenUniswap(address fromTokenAddress, address toTokenAddress, uint tokenAmount) public returns (uint) {
+  function swapTokenForTokenUniswap(address fromTokenAddress, address toTokenAddress, uint tokenAmount) internal returns (uint) {
     if (fromTokenAddress == ETH_MOCK_ADDRESS) {
       return swapEthForTokenUniswap(toTokenAddress, tokenAmount);
     }
@@ -120,7 +120,7 @@ contract TradeBot is FlashLoanReceiverBase {
   /*
     Kyber methods
   */
-  function getAmountOutKyber(address fromToken, address toToken, uint fromTokenAmount) public view returns (uint) {
+  function getAmountOutKyber(address fromToken, address toToken, uint fromTokenAmount) external view returns (uint) {
     uint rate;
     (rate,) = kyberProxy.getExpectedRate(ERC20(fromToken), ERC20(toToken), fromTokenAmount);
     uint amountOut = fromTokenAmount.mul(rate);
@@ -166,7 +166,7 @@ contract TradeBot is FlashLoanReceiverBase {
     return kyberProxy.tradeWithHint(token, tokenAmount, eth, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
   }
 
-  function swapTokenForTokenKyber(address fromTokenAddress, address toTokenAddress, uint tokenAmount) public returns (uint) {
+  function swapTokenForTokenKyber(address fromTokenAddress, address toTokenAddress, uint tokenAmount) internal returns (uint) {
     if (fromTokenAddress == ETH_MOCK_ADDRESS) {
       return swapEthForTokenKyber(toTokenAddress, tokenAmount);
     }
@@ -200,7 +200,7 @@ contract TradeBot is FlashLoanReceiverBase {
   /*
     Arbitrage methods
   */
-  function arbExecute(address stableCoin, address mediatorCoin, uint amount, string memory sellDexBuyDex) public onlyOwner {
+  function arbExecute(address stableCoin, address mediatorCoin, uint amount, string calldata sellDexBuyDex) external onlyOwner {
     // Serialize the command    
     bytes memory serializedCommand = abi.encode(mediatorCoin, sellDexBuyDex);
 
