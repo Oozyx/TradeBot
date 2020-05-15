@@ -1,29 +1,28 @@
 pragma solidity ^0.6.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "./interfaces/IUniswapV2Factory.sol";
-import "./interfaces/IUniswapV2Pair.sol";
-import "./interfaces/IUniswapV2Router01.sol";
 import "./interfaces/KyberNetworkProxyInterface.sol";
 import "./interfaces/FlashLoanReceiverBase.sol";
 import "./interfaces/ILendingPool.sol";
 import "./libs/UniswapV2Library.sol";
 
+// Necessary imports for Uniswap V1
+import "./interfaces/UniswapFactoryInterface.sol";
+import "./interfaces/UniswapExchangeInterface.sol";
+
 contract TradeBot is FlashLoanReceiverBase {
   /*
     Constants
   */
-  address internal constant  UNISWAP_FACTORY_ADDRESS = 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f; // Ropsten
-  address internal constant  UNISWAP_ROUTER_ADDRESS  = 0xf164fC0Ec4E93095b804a4795bBe1e041497b92a; // Ropsten
-  address internal constant  KYBER_PROXY_ADDRESS     = 0x818E6FECD516Ecc3849DAf6845e3EC868087B755; // Ropsten
+  address internal constant  UNISWAP_FACTORY_ADDRESS = 0xc0a47dFe034B400B47bDaD5FecDa2621de6c4d95; // Mainnet
+  address internal constant  KYBER_PROXY_ADDRESS     = 0x818E6FECD516Ecc3849DAf6845e3EC868087B755; // Mainnet
   address internal constant  ETH_MOCK_ADDRESS        = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-  address internal constant  AAVE_ADDRESSES_PROVIDER = 0x1c8756FD2B28e9426CDBDcC7E3c4d64fa9A54728; // Ropsten
+  address internal constant  AAVE_ADDRESSES_PROVIDER = 0x24a42fD28C976A61Df5D00D0599C34c4f90748c8; // Mainnet
   
   /*
     Members
   */
-  IUniswapV2Factory             internal immutable uniswapFactory;
-  IUniswapV2Router01            internal immutable uniswapRouter;
+  UniswapFactoryInterface       internal immutable uniswapFactory;
   KyberNetworkProxyInterface    internal immutable kyberProxy;
   ILendingPool                  internal immutable lendingPool;
 
@@ -36,41 +35,44 @@ contract TradeBot is FlashLoanReceiverBase {
     Constructors
   */
   constructor() FlashLoanReceiverBase(AAVE_ADDRESSES_PROVIDER) public {
-    uniswapFactory = IUniswapV2Factory(UNISWAP_FACTORY_ADDRESS);
-    uniswapRouter  = IUniswapV2Router01(UNISWAP_ROUTER_ADDRESS);
-    kyberProxy     = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
-    lendingPool    = ILendingPool(addressesProvider.getLendingPool());
+    uniswapFactory   = UniswapFactoryInterface(UNISWAP_FACTORY_ADDRESS);
+    kyberProxy       = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
+    lendingPool      = ILendingPool(addressesProvider.getLendingPool());
   }
 
   /*
     Uniswap methods
   */
   function getAmountOutUniswap(address fromToken, address toToken, uint fromTokenAmount) external view returns (uint) {
-    uint fromTokenReserves;
-    uint toTokenReserves;
-    if (fromToken == ETH_MOCK_ADDRESS) {
-      fromToken = uniswapRouter.WETH();
-    }
-    if (toToken == ETH_MOCK_ADDRESS) {
-      toToken = uniswapRouter.WETH();
-    }
-    (fromTokenReserves, toTokenReserves) = UniswapV2Library.getReserves(UNISWAP_FACTORY_ADDRESS, fromToken, toToken);
+    // Limited release, ETH needs to be a part of the trade
+    require((fromToken == ETH_MOCK_ADDRESS || toToken == ETH_MOCK_ADDRESS), "ETH is not one of the tokens to be swapped.");
 
-    return UniswapV2Library.getAmountOut(fromTokenAmount, fromTokenReserves, toTokenReserves);
+    UniswapExchangeInterface exchange;
+    if (fromToken == ETH_MOCK_ADDRESS) {
+      // Get the exchange
+      exchange = UniswapExchangeInterface(uniswapFactory.getExchange(toToken));
+      return exchange.getEthToTokenInputPrice(fromTokenAmount);
+    }
+
+    if (toToken == ETH_MOCK_ADDRESS) {
+      // Get the exchange
+      exchange = UniswapExchangeInterface(uniswapFactory.getExchange(fromToken));
+      return exchange.getTokenToEthInputPrice(fromTokenAmount);
+    }
   }
 
   function swapEthForTokenUniswap(address tokenAddress, uint ethAmount) internal returns (uint) {
-    // Verify we have enough funds
+    // Make sure we have enough ETH
     require(ethAmount <= address(this).balance, "Not enough Eth in contract to perform swap.");
 
-    // Build arguments for uniswap router call
-    address[] memory path = new address[](2);
-    path[0] = uniswapRouter.WETH();
-    path[1] = tokenAddress;
+    // Get the exchange
+    UniswapExchangeInterface exchange = UniswapExchangeInterface(uniswapFactory.getExchange(tokenAddress));
 
-    // Make the call
-    uint[] memory result = uniswapRouter.swapExactETHForTokens{ value: ethAmount }(0, path, address(this), now);
-    return result[1]; // Returns the output amount
+    // Get the token amount that can be bought
+    uint tokenAmount = exchange.getEthToTokenInputPrice(ethAmount);
+
+    // Make the swap
+    return exchange.ethToTokenSwapInput{ value: ethAmount }(tokenAmount, now);
   }
 
   function swapTokenForEthUniswap(address tokenAddress, uint tokenAmount) internal returns (uint) {
@@ -78,20 +80,23 @@ contract TradeBot is FlashLoanReceiverBase {
     ERC20 token = ERC20(tokenAddress);
     require(tokenAmount <= token.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
 
-    // Approve uniswap to manage contract tokens
-    token.approve(address(uniswapRouter), token.balanceOf(address(this)));
+    // Get the exchange
+    UniswapExchangeInterface exchange = UniswapExchangeInterface(uniswapFactory.getExchange(tokenAddress));
 
-    // Build arguments for uniswap router call
-    address[] memory path = new address[](2);
-    path[0] = tokenAddress;
-    path[1] = uniswapRouter.WETH();
+    // Get the amount of ETH that can be bought
+    uint ethAmount = exchange.getTokenToEthInputPrice(tokenAmount);
 
-    // Make the call
-    uint[] memory result = uniswapRouter.swapExactTokensForETH(tokenAmount, 0, path, address(this), now);
-    return result[1]; // Returns the output amount
+    // Approve uniswap for transferring our tokens
+    token.approve(address(exchange), tokenAmount);
+
+    // Make the swap
+    return exchange.tokenToEthSwapInput(tokenAmount, ethAmount, now);
   }
 
   function swapTokenForTokenUniswap(address fromTokenAddress, address toTokenAddress, uint tokenAmount) internal returns (uint) {
+    // Limited release, ETH needs to be a part of the trade
+    require((fromTokenAddress == ETH_MOCK_ADDRESS || toTokenAddress == ETH_MOCK_ADDRESS), "ETH is not one of the tokens to be swapped.");
+    
     if (fromTokenAddress == ETH_MOCK_ADDRESS) {
       return swapEthForTokenUniswap(toTokenAddress, tokenAmount);
     }
@@ -99,22 +104,6 @@ contract TradeBot is FlashLoanReceiverBase {
     if (toTokenAddress == ETH_MOCK_ADDRESS) {
       return swapTokenForEthUniswap(fromTokenAddress, tokenAmount);
     }
-    
-    // Verify we have enough funds
-    ERC20 fromToken = ERC20(fromTokenAddress);
-    require(tokenAmount <= fromToken.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
-
-    // Approve uniswap to manage contract Dai
-    fromToken.approve(address(uniswapRouter), tokenAmount);
-
-    // Build arguments for uniswap router call
-    address[] memory path = new address[](2);
-    path[0] = fromTokenAddress;
-    path[0] = toTokenAddress;
-
-    // Make the call
-    uint[] memory result = uniswapRouter.swapExactTokensForTokens(tokenAmount, 0, path, address(this), now);
-    return result[1];    
   }
 
   /*
