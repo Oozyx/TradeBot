@@ -130,7 +130,7 @@ contract TradeBot is FlashLoanReceiverBase {
 
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
-    return kyberProxy.tradeWithHint{ value: ethAmount }(eth, ethAmount, token, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
+    return kyberProxy.tradeWithHint{ value: ethAmount }(eth, ethAmount, token, address(this), 10**18 * 10**6, minConversionRate, 0x27FB3d86Cc42c710Cb049B9066d337C6A6F151A2, hint);
   }
 
   function swapTokenForEthKyber(address tokenAddress, uint tokenAmount) internal returns (uint) {
@@ -152,7 +152,7 @@ contract TradeBot is FlashLoanReceiverBase {
 
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
-    return kyberProxy.tradeWithHint(token, tokenAmount, eth, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
+    return kyberProxy.tradeWithHint(token, tokenAmount, eth, address(this), 10**18 * 10**6, minConversionRate, 0x27FB3d86Cc42c710Cb049B9066d337C6A6F151A2, hint);
   }
 
   function swapTokenForTokenKyber(address fromTokenAddress, address toTokenAddress, uint tokenAmount) internal returns (uint) {
@@ -183,7 +183,7 @@ contract TradeBot is FlashLoanReceiverBase {
 
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
-    return kyberProxy.tradeWithHint(fromToken, tokenAmount, toToken, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
+    return kyberProxy.tradeWithHint(fromToken, tokenAmount, toToken, address(this), 10**18 * 10**6, minConversionRate, 0x27FB3d86Cc42c710Cb049B9066d337C6A6F151A2, hint);
   }
 
   /*
