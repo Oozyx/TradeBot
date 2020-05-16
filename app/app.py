@@ -1,6 +1,6 @@
 from eth_account import Account
 from web3 import Web3, middleware
-from web3.gas_strategies.time_based import fast_gas_price_strategy
+from web3.gas_strategies.time_based import fast_gas_price_strategy, medium_gas_price_strategy, slow_gas_price_strategy
 import os
 import time
 from requests import Request, Session
@@ -8,7 +8,9 @@ from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import json
 
 # initialize from our Infura provider
-INFURA_ENDPOINT = "https://ropsten.infura.io/v3/baf3c8ecbd384b4daef03573f23c0a30"
+# INFURA_ENDPOINT = "https://ropsten.infura.io/v3/baf3c8ecbd384b4daef03573f23c0a30"
+# INFURA_ENDPOINT = "https://rinkeby.infura.io/v3/baf3c8ecbd384b4daef03573f23c0a30"
+INFURA_ENDPOINT = "https://mainnet.infura.io/v3/baf3c8ecbd384b4daef03573f23c0a30"
 w3 = Web3(Web3.HTTPProvider(INFURA_ENDPOINT))
 # w3.middleware_onion.inject(middleware.geth_poa_middleware, layer=0) # necessary for Rinkeby only
 
@@ -26,9 +28,17 @@ tradeBot = None
 
 # constants
 DECIMALS_18 = 1000000000000000000
+DECIMALS_6  = 1000000
+DECIMALS_8  = 100000000
 ETH_MOCK_ADDRESS = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
-DAI_ADDRESS      = "0xaD6D458402F60fD3Bd25163575031ACDce07538D" # Ropsten
+DAI_ADDRESS      = "0x6B175474E89094C44Da98b954EedeAC495271d0F" # Mainnet
 FLASH_LOAN_FEE   = 0.0009
+SLEEP_DURATION   = 60 * 2 # 1 minutes
+TIME_BUDGET      = SLEEP_DURATION * 50
+
+def log(message):
+    with open(os.path.join(appDir, "log"), "a") as logFile:
+        logFile.write(message + "\n")
 
 def signAndSendTransaction(tx):
     try:
@@ -37,10 +47,10 @@ def signAndSendTransaction(tx):
         txReceipt = w3.eth.waitForTransactionReceipt(txHash)
         gasFee = tx["gasPrice"] * txReceipt["gasUsed"]
 
-        print("Transaction complete.")
-        print("Gas price: " + str(tx["gasPrice"]))
-        print("Gas used: " + str(txReceipt["gasUsed"]))
-        print("Total gas fee: " + str(gasFee) + "\n")
+        log("Transaction complete.")
+        log("Gas price: " + str(tx["gasPrice"]))
+        log("Gas used: " + str(txReceipt["gasUsed"]))
+        log("Total gas fee: " + str(gasFee))
 
         return txReceipt
     
@@ -78,14 +88,10 @@ def initializeContract():
 
         # deploy the contract
         TradeBot = w3.eth.contract(abi=abiTradeBot, bytecode=byteTradeBot)
-        # estimatedGas = TradeBot.constructor().estimateGas({
-        #     "from": w3.eth.defaultAccount.address,
-        # })
         gasPrice = w3.eth.generateGasPrice()
         tx = TradeBot.constructor().buildTransaction({
             "from": w3.eth.defaultAccount.address,
             "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
-            # "gas": estimatedGas,
             "gasPrice": gasPrice,
         })
         txReceipt = signAndSendTransaction(tx)
@@ -99,12 +105,21 @@ def initializeContract():
             contractInfo.write(tradeBot.address + "\n")
 
 def arbExecute(stableCoinAddress, mediatorCoinAddress, amount, dexOrder, gasLimit, gasPrice):
-    tx = tradeBot.functions.arbExecute(stableCoinAddress, mediatorCoinAddress, amount, dexOrder).buildTransaction({
-        "from": w3.eth.defaultAccount.address,
-        "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
-        "gas": gasLimit,
-        "gasPrice": gasPrice,
-    })
+    if dexOrder == "SELL_UNI_BUY_KYB":
+        tx = tradeBot.functions.arbSellUniswapBuyKyber(stableCoinAddress, mediatorCoinAddress, amount).buildTransaction({
+            "from": w3.eth.defaultAccount.address,
+            "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
+            "gas": gasLimit,
+            "gasPrice": gasPrice,
+        })
+    if dexOrder == "SELL_KYB_BUY_UNI":
+        tx = tradeBot.functions.arbSellKyberBuyUniswap(stableCoinAddress, mediatorCoinAddress, amount).buildTransaction({
+            "from": w3.eth.defaultAccount.address,
+            "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
+            "gas": gasLimit,
+            "gasPrice": gasPrice,
+        })
+
     return signAndSendTransaction(tx)
 
 def getAmountOutUniswap(addressFromToken, addressToToken, fromTokenAmount):
@@ -113,20 +128,17 @@ def getAmountOutUniswap(addressFromToken, addressToToken, fromTokenAmount):
     })
 
 def getAmountOutKyber(addressFromToken, addressToToken, fromTokenAmount):
-    return tradeBot.functions.getAmountOutKyber(addressFromToken, addressToToken, fromTokenAmount).call({
+    rate = tradeBot.functions.getExpectedRateKyber(addressFromToken, addressToToken, fromTokenAmount).call({
         "from": w3.eth.defaultAccount.address,
     })
+    return int(fromTokenAmount * (rate / DECIMALS_18))
 
 def depositEth(ethAmount):
-    # estimatedGas = tradeBot.functions.depositEth().estimateGas({
-    #     "from": w3.eth.defaultAccount.address,
-    # })
     gasPrice = w3.eth.generateGasPrice()
     tx = tradeBot.functions.depositEth().buildTransaction({
         "value": ethAmount,
         "from": w3.eth.defaultAccount.address,
         "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
-        # "gas": estimatedGas,
         "gasPrice": gasPrice,
     })
     signAndSendTransaction(tx)
@@ -139,41 +151,29 @@ def depositToken(tokenAddress, tokenAmount):
     token = w3.eth.contract(address=tokenAddress, abi=abiERC20)
 
     # approve the token transfer
-    # estimatedGas = token.functions.approve(tradeBot.address, tokenAmount).estimateGas({
-    #     "from": w3.eth.defaultAccount.address,
-    # })
     gasPrice = w3.eth.generateGasPrice()
     tx = token.functions.approve(tradeBot.address, tokenAmount).buildTransaction({
         "from": w3.eth.defaultAccount.address,
         "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
-        # "gas": estimatedGas,
         "gasPrice": gasPrice,
     })
     signAndSendTransaction(tx)
 
     # deposit the token
-    # estimatedGas = tradeBot.functions.depositToken(tokenAddress, tokenAmount).estimateGas({
-    #     "from": w3.eth.defaultAccount.address,
-    # })
     gasPrice = w3.eth.generateGasPrice()
     tx = tradeBot.functions.depositToken(tokenAddress, tokenAmount).buildTransaction({
         "from": w3.eth.defaultAccount.address,
         "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
-        # "gas": estimatedGas,
         "gasPrice": gasPrice,
     })
     signAndSendTransaction(tx)
 
 def withdrawEth():
     # build the withdrawal transaction and send it
-    # estimatedGas = tradeBot.functions.withdrawEth().estimateGas({
-    #     "from": w3.eth.defaultAccount.address,
-    # })
     gasPrice = w3.eth.generateGasPrice()
     tx = tradeBot.functions.withdrawEth().buildTransaction({
         "from": w3.eth.defaultAccount.address,
         "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
-        # "gas": estimatedGas,
         "gasPrice": gasPrice,
     })
     signAndSendTransaction(tx)
@@ -209,9 +209,13 @@ def getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddress, loanAmount, de
         mediatorCoinAmount = getAmountOutKyber(stableCoinAddress, mediatorCoinAddress, loanAmount)
         netTradeAmount = getAmountOutUniswap(mediatorCoinAddress, stableCoinAddress, mediatorCoinAmount)
 
-    if (netTradeAmount > loanAmount * (FLASH_LOAN_FEE + 1)):
-        return (netTradeAmount - loanAmount * (FLASH_LOAN_FEE + 1)) / DECIMALS_18
+    log("Net Trade Amount: " + str(netTradeAmount))
+
+    if (netTradeAmount > loanAmount):
+        log("Profitable Trade! Profit: " + str(netTradeAmount - loanAmount))
+        return (netTradeAmount - loanAmount)
     else:
+        log("Amount of Wei lost: " + str(loanAmount - netTradeAmount))
         return 0
 
 def getGasFeeUSD(session, gasFeeWEI):
@@ -236,43 +240,56 @@ def main():
         print(e)
         exit()
 
-    # initialize API consumption
-    session = getAPISession()
-
     # set which assets and amounts we want to trade with
     stableCoinAddress = ETH_MOCK_ADDRESS
-    mediatorCoinAddress = DAI_ADDRESS
-    loanAmount = 100000000000000000
+    mediatorCoinAddress = "0x514910771AF9Ca656af840dff83E8264EcF986CA"
+    loanAmount = 1 * DECIMALS_18
 
+    timeBudget = TIME_BUDGET
     searchForArb = True
     while (searchForArb):
         # get gas price
         gasPrice = w3.eth.generateGasPrice()
-
-        # get estimated gas
-        estimatedGas = tradeBot.functions.arbExecute(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_KYB_BUY_UNI").estimateGas({
-        "from": w3.eth.defaultAccount.address,
-        })
+        # gasPrice = 10000000000
+        estimatedGas = 400000
 
         # calculate the gas fee 
         gasFeeWei = estimatedGas * gasPrice
-        gasFeeUSD = getGasFeeUSD(session, gasFeeWei)
+
+        log("Gas fee Wei: " + str(gasFeeWei))
 
         # for every dex order calculate potential profit and execute if greater than gas fee
+        profit = getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_UNI_BUY_KYB")
+        if profit > gasFeeWei:
+            arbExecute(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_UNI_BUY_KYB", estimatedGas, gasPrice)
+            log("Trade made!")
+            searchForArb = False
+
         profit = getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_KYB_BUY_UNI")
-        if profit > gasFeeUSD:
-            txReceipt = arbExecute(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_KYB_BUY_UNI", estimatedGas, gasPrice)
-            print("Trade made! Tx hash :" + str(txReceipt["transactionHash"]))
+        if profit > gasFeeWei:
+            arbExecute(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_KYB_BUY_UNI", estimatedGas, gasPrice)
+            log("Trade made!")
             searchForArb = False
         
-        profit = getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_UNI_BUY_KYB")
-        # if profit > gasFeeUSD:
-        txReceipt = arbExecute(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_UNI_BUY_KYB", estimatedGas, gasPrice)
-        print("Trade made! Tx hash :" + str(txReceipt["transactionHash"]))
-        searchForArb = False
         
-        time.sleep(10)
+        
+        log("")
+        timeBudget = timeBudget - SLEEP_DURATION
+        if (timeBudget == 0):
+            searchForArb = False
+        time.sleep(SLEEP_DURATION)
 
 
 if __name__ == "__main__":
     main()
+
+    # try:
+    #     initializeContract()
+    # except ValueError as e:
+    #     print(e)
+    #     exit()
+    
+    # withdrawEth()
+    # depositEth(DECIMALS_18)
+
+
