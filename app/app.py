@@ -250,10 +250,11 @@ def main():
     loanAmount = 1 * DECIMALS_18
 
     searchForArb = True
+    timeBudget = TIME_BUDGET
     while (searchForArb):
         # get gas price
-        gasPrice = w3.eth.generateGasPrice()
-        # gasPrice = 10000000000
+        # gasPrice = w3.eth.generateGasPrice()
+        gasPrice = 10000000000
         estimatedGas = 550000
 
         # calculate the gas fee 
@@ -266,21 +267,21 @@ def main():
             log(coin)
             profit = getArbitrageProfit(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_UNI_BUY_KYB")
             if profit > gasFeeWei:
-                arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_UNI_BUY_KYB", estimatedGas, gasPrice)
+                # arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_UNI_BUY_KYB", estimatedGas, gasPrice)
                 log("Trade made!")
                 searchForArb = False
 
             profit = getArbitrageProfit(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_UNI")
             if profit > gasFeeWei:
-                arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_UNI", estimatedGas, gasPrice)
+                # arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_UNI", estimatedGas, gasPrice)
                 log("Trade made!")
                 searchForArb = False
         
         log("")
-        # timeBudget = timeBudget - SLEEP_DURATION
+        timeBudget = timeBudget - SLEEP_DURATION
         # if (timeBudget == 0):
         #     searchForArb = False
-        # time.sleep(SLEEP_DURATION)
+        time.sleep(SLEEP_DURATION)
 
 
 if __name__ == "__main__":
