@@ -4,7 +4,7 @@ node_modules
 bin
 /solidity-flattener/*
 .privatekey
-.contractinfo
 online_resources.txt
 /.vscode/*
 test.py
+log
