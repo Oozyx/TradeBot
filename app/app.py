@@ -15,7 +15,7 @@ w3 = Web3(Web3.HTTPProvider(INFURA_ENDPOINT))
 # w3.middleware_onion.inject(middleware.geth_poa_middleware, layer=0) # necessary for Rinkeby only
 
 # set gas price strategy
-w3.eth.setGasPriceStrategy(fast_gas_price_strategy)
+w3.eth.setGasPriceStrategy(medium_gas_price_strategy)
 
 # CoinMarketCap API key
 COIN_MARKET_CAP_KEY = "9924e4f9-55a3-493e-bcaa-66f8fc4c4a5d"
@@ -33,7 +33,7 @@ DECIMALS_8  = 100000000
 ETH_MOCK_ADDRESS = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
 DAI_ADDRESS      = "0x6B175474E89094C44Da98b954EedeAC495271d0F" # Mainnet
 FLASH_LOAN_FEE   = 0.0009
-SLEEP_DURATION   = 60 * 2 # 1 minutes
+SLEEP_DURATION   = 60 * 1 # 1 minutes
 TIME_BUDGET      = SLEEP_DURATION * 50
 
 def log(message):
@@ -69,13 +69,6 @@ def initializeContract():
         with open(os.path.join(appDir, ".contractinfo"), "r") as contractInfo:
             abiSaved = contractInfo.readline().strip("\n")
             addressSaved = contractInfo.readline().strip("\n")
-        
-        # make sure it matches most recent build
-        with open(os.path.join(appDir, "../bin/contracts/TradeBot.abi"), "r") as abiFile:
-            abiBuild = abiFile.read()
-
-        if abiBuild != abiSaved:
-            raise ValueError("Latest contract build does not matched latest deployed. Rebuild contract and delete saved contract info file.")
 
         tradeBot = w3.eth.contract(address=addressSaved, abi=abiSaved)
     else:
@@ -209,13 +202,12 @@ def getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddress, loanAmount, de
         mediatorCoinAmount = getAmountOutKyber(stableCoinAddress, mediatorCoinAddress, loanAmount)
         netTradeAmount = getAmountOutUniswap(mediatorCoinAddress, stableCoinAddress, mediatorCoinAmount)
 
-    log("Net Trade Amount: " + str(netTradeAmount))
+    log(dexOrder + " net trade amount: " + str(netTradeAmount))
 
     if (netTradeAmount > loanAmount):
         log("Profitable Trade! Profit: " + str(netTradeAmount - loanAmount))
         return (netTradeAmount - loanAmount)
     else:
-        log("Amount of Wei lost: " + str(loanAmount - netTradeAmount))
         return 0
 
 def getGasFeeUSD(session, gasFeeWEI):
@@ -242,7 +234,19 @@ def main():
 
     # set which assets and amounts we want to trade with
     stableCoinAddress = ETH_MOCK_ADDRESS
-    mediatorCoinAddress = "0x514910771AF9Ca656af840dff83E8264EcF986CA"
+    mediatorCoinAddresses = {
+        "LEND": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+        "KNC": "0xdd974D5C2e2928deA5F71b9825b8b646686BD200",
+        "MKR": "0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2",
+        "ZRX": "0xE41d2489571d322189246DaFA5ebDe1F4699F498",
+        "DAI": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+        "SNX": "0xC011a73ee8576Fb46F5E1c5751cA3B9Fe0af2a6F",
+        "BNT": "0x1F573D6Fb3F13d689FF844B4cE37794d79a7FF1C",
+        "WETH": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        "LINK": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+        "BAT": "0x0D8775F648430679A709E98d2b0Cb6250d2887EF"
+    }
+    # mediatorCoinAddress = "0x514910771AF9Ca656af840dff83E8264EcF986CA"
     loanAmount = 1 * DECIMALS_18
 
     timeBudget = TIME_BUDGET
@@ -258,26 +262,26 @@ def main():
 
         log("Gas fee Wei: " + str(gasFeeWei))
 
-        # for every dex order calculate potential profit and execute if greater than gas fee
-        profit = getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_UNI_BUY_KYB")
-        if profit > gasFeeWei:
-            arbExecute(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_UNI_BUY_KYB", estimatedGas, gasPrice)
-            log("Trade made!")
-            searchForArb = False
+        for coin in mediatorCoinAddresses:
+            # for every dex order calculate potential profit and execute if greater than gas fee
+            log(coin)
+            profit = getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_UNI_BUY_KYB")
+            if profit > gasFeeWei:
+                arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_UNI_BUY_KYB", estimatedGas, gasPrice)
+                log("Trade made!")
+                searchForArb = False
 
-        profit = getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_KYB_BUY_UNI")
-        if profit > gasFeeWei:
-            arbExecute(stableCoinAddress, mediatorCoinAddress, loanAmount, "SELL_KYB_BUY_UNI", estimatedGas, gasPrice)
-            log("Trade made!")
-            searchForArb = False
-        
-        
+            profit = getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_UNI")
+            if profit > gasFeeWei:
+                arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_UNI", estimatedGas, gasPrice)
+                log("Trade made!")
+                searchForArb = False
         
         log("")
-        timeBudget = timeBudget - SLEEP_DURATION
-        if (timeBudget == 0):
-            searchForArb = False
-        time.sleep(SLEEP_DURATION)
+        # timeBudget = timeBudget - SLEEP_DURATION
+        # if (timeBudget == 0):
+        #     searchForArb = False
+        # time.sleep(SLEEP_DURATION)
 
 
 if __name__ == "__main__":
