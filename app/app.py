@@ -193,7 +193,7 @@ def getAPISession():
     session.headers.update(headers)
     return session
 
-def getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddress, loanAmount, dexOrder):
+def getArbitrageProfit(stableCoinAddress, mediatorCoinAddress, loanAmount, dexOrder):
     if dexOrder == "SELL_UNI_BUY_KYB":
         mediatorCoinAmount = getAmountOutUniswap(stableCoinAddress, mediatorCoinAddress, loanAmount)
         netTradeAmount = getAmountOutKyber(mediatorCoinAddress, stableCoinAddress, mediatorCoinAmount)
@@ -249,13 +249,12 @@ def main():
     # mediatorCoinAddress = "0x514910771AF9Ca656af840dff83E8264EcF986CA"
     loanAmount = 1 * DECIMALS_18
 
-    timeBudget = TIME_BUDGET
     searchForArb = True
     while (searchForArb):
         # get gas price
         gasPrice = w3.eth.generateGasPrice()
         # gasPrice = 10000000000
-        estimatedGas = 400000
+        estimatedGas = 550000
 
         # calculate the gas fee 
         gasFeeWei = estimatedGas * gasPrice
@@ -265,13 +264,13 @@ def main():
         for coin in mediatorCoinAddresses:
             # for every dex order calculate potential profit and execute if greater than gas fee
             log(coin)
-            profit = getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_UNI_BUY_KYB")
+            profit = getArbitrageProfit(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_UNI_BUY_KYB")
             if profit > gasFeeWei:
                 arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_UNI_BUY_KYB", estimatedGas, gasPrice)
                 log("Trade made!")
                 searchForArb = False
 
-            profit = getArbitrageProfitUSD(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_UNI")
+            profit = getArbitrageProfit(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_UNI")
             if profit > gasFeeWei:
                 arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_UNI", estimatedGas, gasPrice)
                 log("Trade made!")

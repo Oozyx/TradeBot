@@ -2,16 +2,17 @@ pragma solidity ^0.6.0;
 
 import "./interfaces/ERC20.sol";
 import "./interfaces/KyberNetworkProxyInterface.sol";
+import "./interfaces/IUniswapV2Factory.sol";
+import "./interfaces/IUniswapV2Router01.sol";
+import "./libs/UniswapV2Library.sol";
 
-// Necessary imports for Uniswap V1
-import "./interfaces/UniswapFactoryInterface.sol";
-import "./interfaces/UniswapExchangeInterface.sol";
 
 contract TradeBot {
   /*
     Constants
   */
-  address internal constant  UNISWAP_FACTORY_ADDRESS = 0xc0a47dFe034B400B47bDaD5FecDa2621de6c4d95; // Mainnet
+  address internal constant  UNISWAP_FACTORY_ADDRESS = 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f; // Mainnet
+  address internal constant  UNISWAP_ROUTER_ADDRESS  = 0xf164fC0Ec4E93095b804a4795bBe1e041497b92a; // Mainnet
   address internal constant  KYBER_PROXY_ADDRESS     = 0x818E6FECD516Ecc3849DAf6845e3EC868087B755; // Mainnet
   address internal constant  ETH_MOCK_ADDRESS        = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
   
@@ -19,7 +20,8 @@ contract TradeBot {
     Members
   */
   address                       internal immutable owner;
-  UniswapFactoryInterface       internal immutable uniswapFactory;
+  IUniswapV2Factory             internal immutable uniswapFactory;
+  IUniswapV2Router01            internal immutable uniswapRouter;
   KyberNetworkProxyInterface    internal immutable kyberProxy;
 
   /*
@@ -37,41 +39,55 @@ contract TradeBot {
     Constructors
   */
   constructor() public {
-    owner            = msg.sender;
-    uniswapFactory   = UniswapFactoryInterface(UNISWAP_FACTORY_ADDRESS);
-    kyberProxy       = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
+    owner          = msg.sender;
+    uniswapFactory = IUniswapV2Factory(UNISWAP_FACTORY_ADDRESS);
+    uniswapRouter  = IUniswapV2Router01(UNISWAP_ROUTER_ADDRESS);
+    kyberProxy     = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
   }
 
   /*
     Uniswap methods
   */
-  function getAmountOutUniswap(address fromToken, address toToken, uint fromTokenAmount) external view returns (uint) {
+  function getAmountOutUniswap(address fromToken, address toToken, uint fromTokenAmount) public view returns (uint) {
+    uint fromTokenReserves;
+    uint toTokenReserves;
     if (fromToken == ETH_MOCK_ADDRESS) {
-      return UniswapExchangeInterface(uniswapFactory.getExchange(toToken)).getEthToTokenInputPrice(fromTokenAmount);
+      fromToken = uniswapRouter.WETH();
     }
-
     if (toToken == ETH_MOCK_ADDRESS) {
-      return UniswapExchangeInterface(uniswapFactory.getExchange(fromToken)).getTokenToEthInputPrice(fromTokenAmount);
+      toToken = uniswapRouter.WETH();
     }
+    (fromTokenReserves, toTokenReserves) = UniswapV2Library.getReserves(UNISWAP_FACTORY_ADDRESS, fromToken, toToken);
+
+    return UniswapV2Library.getAmountOut(fromTokenAmount, fromTokenReserves, toTokenReserves);
   }
 
   function swapEthForTokenUniswap(address tokenAddress, uint ethAmount) internal returns (uint) {
-    // Get the exchange
-    UniswapExchangeInterface exchange = UniswapExchangeInterface(uniswapFactory.getExchange(tokenAddress));
+    // Build arguments for uniswap router call
+    address[] memory path = new address[](2);
+    path[0] = uniswapRouter.WETH();
+    path[1] = tokenAddress;
 
-    // Make the swap
-    return exchange.ethToTokenSwapInput{ value: ethAmount }(exchange.getEthToTokenInputPrice(ethAmount), now);
+    // Make the call
+    //uint tokenAmountOut = getAmountOutUniswap(path[0], path[1], ethAmount);
+    uint[] memory result = uniswapRouter.swapExactETHForTokens{ value: ethAmount }(0, path, address(this), now);
+    return result[1]; // Returns the output amount
   }
 
   function swapTokenForEthUniswap(address tokenAddress, uint tokenAmount) internal returns (uint) {
-    // Get the exchange
-    UniswapExchangeInterface exchange = UniswapExchangeInterface(uniswapFactory.getExchange(tokenAddress));
+    // Approve uniswap to manage contract tokens
+    ERC20 token = ERC20(tokenAddress);
+    token.approve(address(uniswapRouter), token.balanceOf(address(this)));
 
-    // Approve uniswap for transferring our tokens
-    ERC20(tokenAddress).approve(address(exchange), tokenAmount);
+    // Build arguments for uniswap router call
+    address[] memory path = new address[](2);
+    path[0] = tokenAddress;
+    path[1] = uniswapRouter.WETH();
 
-    // Make the swap
-    return exchange.tokenToEthSwapInput(tokenAmount, exchange.getTokenToEthInputPrice(tokenAmount), now);
+    // Make the call
+    //uint tokenAmountOut = getAmountOutUniswap(path[0], path[1], tokenAmount);
+    uint[] memory result = uniswapRouter.swapExactTokensForETH(tokenAmount, 0, path, address(this), now);
+    return result[1]; // Returns the output amount
   }
 
   function swapTokenForTokenUniswap(address fromTokenAddress, address toTokenAddress, uint tokenAmount) internal returns (uint) {    
