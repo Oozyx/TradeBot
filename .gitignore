@@ -8,3 +8,4 @@ bin
 online_resources.txt
 /.vscode/*
 test.py
+log

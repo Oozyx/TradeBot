@@ -7,8 +7,7 @@
     "test": "test"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^3.0.1",
-    "@truffle/hdwallet-provider": "^1.0.34"
+    "@openzeppelin/contracts": "^3.0.1"
   },
   "devDependencies": {},
   "scripts": {
