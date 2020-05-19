@@ -105,6 +105,15 @@ def arbExecute(stableCoinAddress, mediatorCoinAddress, amount, dexOrder, gasLimi
             "gas": gasLimit,
             "gasPrice": gasPrice,
         })
+
+    if dexOrder == "SELL_UNI_BUY_BAN":
+        tx = tradeBot.functions.arbSellUniswapBuyBancor(stableCoinAddress, mediatorCoinAddress, amount).buildTransaction({
+            "from": w3.eth.defaultAccount.address,
+            "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
+            "gas": gasLimit,
+            "gasPrice": gasPrice,
+        })
+
     if dexOrder == "SELL_KYB_BUY_UNI":
         tx = tradeBot.functions.arbSellKyberBuyUniswap(stableCoinAddress, mediatorCoinAddress, amount).buildTransaction({
             "from": w3.eth.defaultAccount.address,
@@ -113,7 +122,36 @@ def arbExecute(stableCoinAddress, mediatorCoinAddress, amount, dexOrder, gasLimi
             "gasPrice": gasPrice,
         })
 
+    if dexOrder == "SELL_KYB_BUY_BAN":
+        tx = tradeBot.functions.arbSellKyberBuyBancor(stableCoinAddress, mediatorCoinAddress, amount).buildTransaction({
+            "from": w3.eth.defaultAccount.address,
+            "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
+            "gas": gasLimit,
+            "gasPrice": gasPrice,
+        })
+
+    if dexOrder == "SELL_BAN_BUY_UNI":
+        tx = tradeBot.functions.arbSellBancorBuyUniswap(stableCoinAddress, mediatorCoinAddress, amount).buildTransaction({
+            "from": w3.eth.defaultAccount.address,
+            "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
+            "gas": gasLimit,
+            "gasPrice": gasPrice,
+        })
+
+    if dexOrder == "SELL_BAN_BUY_KYB":
+        tx = tradeBot.functions.arbSellBancorBuyKyber(stableCoinAddress, mediatorCoinAddress, amount).buildTransaction({
+            "from": w3.eth.defaultAccount.address,
+            "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
+            "gas": gasLimit,
+            "gasPrice": gasPrice,
+        })
+
     return signAndSendTransaction(tx)
+
+def getAmountOutBancor(addressFromToken, addressToToken, fromTokenAmount):
+    return tradeBot.functions.getAmountOutBancor(addressFromToken, addressToToken, fromTokenAmount).call({
+        "from": w3.eth.defaultAccount.address,
+    })
 
 def getAmountOutUniswap(addressFromToken, addressToToken, fromTokenAmount):
     return tradeBot.functions.getAmountOutUniswap(addressFromToken, addressToToken, fromTokenAmount).call({
@@ -197,15 +235,31 @@ def getArbitrageProfit(stableCoinAddress, mediatorCoinAddress, loanAmount, dexOr
     if dexOrder == "SELL_UNI_BUY_KYB":
         mediatorCoinAmount = getAmountOutUniswap(stableCoinAddress, mediatorCoinAddress, loanAmount)
         netTradeAmount = getAmountOutKyber(mediatorCoinAddress, stableCoinAddress, mediatorCoinAmount)
+
+    if dexOrder == "SELL_UNI_BUY_BAN":
+        mediatorCoinAmount = getAmountOutUniswap(stableCoinAddress, mediatorCoinAddress, loanAmount)
+        netTradeAmount = getAmountOutBancor(mediatorCoinAddress, stableCoinAddress, mediatorCoinAmount)
         
     if dexOrder == "SELL_KYB_BUY_UNI":
         mediatorCoinAmount = getAmountOutKyber(stableCoinAddress, mediatorCoinAddress, loanAmount)
         netTradeAmount = getAmountOutUniswap(mediatorCoinAddress, stableCoinAddress, mediatorCoinAmount)
+    
+    if dexOrder == "SELL_KYB_BUY_BAN":
+        mediatorCoinAmount = getAmountOutKyber(stableCoinAddress, mediatorCoinAddress, loanAmount)
+        netTradeAmount = getAmountOutBancor(mediatorCoinAddress, stableCoinAddress, mediatorCoinAmount)
+    
+    if dexOrder == "SELL_BAN_BUY_UNI":
+        mediatorCoinAmount = getAmountOutBancor(stableCoinAddress, mediatorCoinAddress, loanAmount)
+        netTradeAmount = getAmountOutUniswap(mediatorCoinAddress, stableCoinAddress, mediatorCoinAmount)
+    
+    if dexOrder == "SELL_BAN_BUY_KYB":
+        mediatorCoinAmount = getAmountOutBancor(stableCoinAddress, mediatorCoinAddress, loanAmount)
+        netTradeAmount = getAmountOutKyber(mediatorCoinAddress, stableCoinAddress, mediatorCoinAmount)
 
     log(dexOrder + " net trade amount: " + str(netTradeAmount))
 
     if (netTradeAmount > loanAmount):
-        log("Profitable Trade! Profit: " + str(netTradeAmount - loanAmount))
+        log("Profitable Trade! Profit: " + str((netTradeAmount - loanAmount) / DECIMALS_18))
         return (netTradeAmount - loanAmount)
     else:
         return 0
@@ -235,7 +289,7 @@ def main():
     # set which assets and amounts we want to trade with
     stableCoinAddress = ETH_MOCK_ADDRESS
     mediatorCoinAddresses = {
-        "LEND": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+        "LEND": "0x80fB784B7eD66730e8b1DBd9820aFD29931aab03",
         "KNC": "0xdd974D5C2e2928deA5F71b9825b8b646686BD200",
         "MKR": "0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2",
         "ZRX": "0xE41d2489571d322189246DaFA5ebDe1F4699F498",
@@ -250,7 +304,7 @@ def main():
     loanAmount = 1 * DECIMALS_18
 
     searchForArb = True
-    timeBudget = TIME_BUDGET
+    # timeBudget = TIME_BUDGET
     while (searchForArb):
         # get gas price
         # gasPrice = w3.eth.generateGasPrice()
@@ -260,7 +314,7 @@ def main():
         # calculate the gas fee 
         gasFeeWei = estimatedGas * gasPrice
 
-        log("Gas fee Wei: " + str(gasFeeWei))
+        log("Gas fee ETH: " + str(gasFeeWei / DECIMALS_18))
 
         for coin in mediatorCoinAddresses:
             # for every dex order calculate potential profit and execute if greater than gas fee
@@ -271,14 +325,38 @@ def main():
                 log("Trade made!")
                 searchForArb = False
 
+            profit = getArbitrageProfit(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_UNI_BUY_BAN")
+            if profit > gasFeeWei:
+                # arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_UNI_BUY_BAN", estimatedGas, gasPrice)
+                log("Trade made!")
+                searchForArb = False
+
             profit = getArbitrageProfit(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_UNI")
             if profit > gasFeeWei:
                 # arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_UNI", estimatedGas, gasPrice)
                 log("Trade made!")
                 searchForArb = False
+
+            profit = getArbitrageProfit(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_BAN")
+            if profit > gasFeeWei:
+                # arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_KYB_BUY_BAN", estimatedGas, gasPrice)
+                log("Trade made!")
+                searchForArb = False
+
+            profit = getArbitrageProfit(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_BAN_BUY_UNI")
+            if profit > gasFeeWei:
+                # arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_BAN_BUY_UNI", estimatedGas, gasPrice)
+                log("Trade made!")
+                searchForArb = False
+
+            profit = getArbitrageProfit(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_BAN_BUY_KYB")
+            if profit > gasFeeWei:
+                # arbExecute(stableCoinAddress, mediatorCoinAddresses[coin], loanAmount, "SELL_BAN_BUY_KYB", estimatedGas, gasPrice)
+                log("Trade made!")
+                searchForArb = False
         
         log("")
-        timeBudget = timeBudget - SLEEP_DURATION
+        # timeBudget = timeBudget - SLEEP_DURATION
         # if (timeBudget == 0):
         #     searchForArb = False
         time.sleep(SLEEP_DURATION)
