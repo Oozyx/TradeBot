@@ -5,9 +5,8 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "./IFlashLoanReceiver.sol";
 import "./ILendingPoolAddressesProvider.sol";
-import "../utils/Withdrawable.sol";
 
-abstract contract FlashLoanReceiverBase is IFlashLoanReceiver, Withdrawable {
+abstract contract FlashLoanReceiverBase is IFlashLoanReceiver {
 
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
@@ -18,8 +17,6 @@ abstract contract FlashLoanReceiverBase is IFlashLoanReceiver, Withdrawable {
     constructor(address _addressProvider) public {
         addressesProvider = ILendingPoolAddressesProvider(_addressProvider);
     }
-
-    receive() payable external {}
 
     function transferFundsBackToPoolInternal(address _reserve, uint256 _amount) internal {
         address payable core = addressesProvider.getLendingPoolCore();

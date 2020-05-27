@@ -1,31 +1,30 @@
 pragma solidity ^0.6.0;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "./interfaces/IUniswapV2Factory.sol";
-import "./interfaces/IUniswapV2Pair.sol";
 import "./interfaces/IUniswapV2Router01.sol";
 import "./interfaces/KyberNetworkProxyInterface.sol";
-import "./interfaces/FlashLoanReceiverBase.sol";
-import "./interfaces/ILendingPool.sol";
+import "./interfaces/UniswapFactoryInterface.sol";
+import "./interfaces/UniswapExchangeInterface.sol";
+import "./interfaces/GasToken.sol";
 import "./libs/UniswapV2Library.sol";
+import "./utils/Withdrawable.sol";
 
-contract TradeBot is FlashLoanReceiverBase {
+contract TradeBot is Withdrawable {
   /*
     Constants
   */
-  address internal constant  UNISWAP_FACTORY_ADDRESS = 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f; // Ropsten
-  address internal constant  UNISWAP_ROUTER_ADDRESS  = 0xf164fC0Ec4E93095b804a4795bBe1e041497b92a; // Ropsten
-  address internal constant  KYBER_PROXY_ADDRESS     = 0x818E6FECD516Ecc3849DAf6845e3EC868087B755; // Ropsten
-  address internal constant  ETH_MOCK_ADDRESS        = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-  address internal constant  AAVE_ADDRESSES_PROVIDER = 0x1c8756FD2B28e9426CDBDcC7E3c4d64fa9A54728; // Ropsten
+  address internal constant UNISWAPV2_FACTORY_ADDRESS = 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f; // Ropsten
+  address internal constant UNISWAPV2_ROUTER_ADDRESS  = 0xf164fC0Ec4E93095b804a4795bBe1e041497b92a; // Ropsten
+  address internal constant UNISWAPV1_FACTORY_ADDRESS = 0xc0a47dFe034B400B47bDaD5FecDa2621de6c4d95;
+  address internal constant KYBER_PROXY_ADDRESS       = 0x818E6FECD516Ecc3849DAf6845e3EC868087B755; // Ropsten
+  address internal constant ETH_MOCK_ADDRESS          = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+  address internal constant GAS_TOKEN_ADDRESS         = 0x0000000000b3F879cb30FE243b4Dfee438691c04; // Ropsten
   
   /*
     Members
   */
-  IUniswapV2Factory             internal immutable uniswapFactory;
-  IUniswapV2Router01            internal immutable uniswapRouter;
-  KyberNetworkProxyInterface    internal immutable kyberProxy;
-  ILendingPool                  internal immutable lendingPool;
+  IUniswapV2Router01         internal immutable uniswapV2Router;
+  UniswapFactoryInterface    internal immutable uniswapV1Factory;
+  KyberNetworkProxyInterface internal immutable kyberProxy;
 
   /*
     Events
@@ -35,77 +34,106 @@ contract TradeBot is FlashLoanReceiverBase {
   /*
     Constructors
   */
-  constructor() FlashLoanReceiverBase(AAVE_ADDRESSES_PROVIDER) public {
-    uniswapFactory = IUniswapV2Factory(UNISWAP_FACTORY_ADDRESS);
-    uniswapRouter  = IUniswapV2Router01(UNISWAP_ROUTER_ADDRESS);
-    kyberProxy     = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
-    lendingPool    = ILendingPool(addressesProvider.getLendingPool());
+  constructor() public {
+    uniswapV2Router  = IUniswapV2Router01(UNISWAPV2_ROUTER_ADDRESS);
+    uniswapV1Factory = UniswapFactoryInterface(UNISWAPV1_FACTORY_ADDRESS);
+    kyberProxy       = KyberNetworkProxyInterface(KYBER_PROXY_ADDRESS);
   }
 
   /*
-    Uniswap methods
+    UniswapV1 methods
   */
-  function getAmountOutUniswap(address fromToken, address toToken, uint fromTokenAmount) external view returns (uint) {
+  function getAmountOutUniswapV1(address fromToken, address toToken, uint fromTokenAmount) external view returns (uint) {
+    if (fromToken == ETH_MOCK_ADDRESS) {
+      return UniswapExchangeInterface(uniswapV1Factory.getExchange(toToken)).getEthToTokenInputPrice(fromTokenAmount);
+    }
+
+    if (toToken == ETH_MOCK_ADDRESS) {
+      return UniswapExchangeInterface(uniswapV1Factory.getExchange(fromToken)).getTokenToEthInputPrice(fromTokenAmount);
+    }
+  }
+
+  function swapEthForTokenUniswapV1(address tokenAddress, uint ethAmount) internal returns (uint) {
+    // Get the exchange
+    UniswapExchangeInterface exchange = UniswapExchangeInterface(uniswapV1Factory.getExchange(tokenAddress));
+
+    // Make the swap
+    return exchange.ethToTokenSwapInput{ value: ethAmount }(1, now);
+  }
+
+  function swapTokenForEthUniswapV1(address tokenAddress, uint tokenAmount) internal returns (uint) {
+    // Get the exchange
+    UniswapExchangeInterface exchange = UniswapExchangeInterface(uniswapV1Factory.getExchange(tokenAddress));
+
+    // Make the swap
+    return exchange.tokenToEthSwapInput(tokenAmount, 1, now);
+  }
+
+  function swapTokenForTokenUniswapV1(address fromTokenAddress, address toTokenAddress, uint tokenAmount) internal returns (uint) {    
+    if (fromTokenAddress == ETH_MOCK_ADDRESS) {
+      return swapEthForTokenUniswapV1(toTokenAddress, tokenAmount);
+    }
+    
+    if (toTokenAddress == ETH_MOCK_ADDRESS) {
+      return swapTokenForEthUniswapV1(fromTokenAddress, tokenAmount);
+    }
+  }
+
+  /*
+    Uniswap V2 methods
+  */
+  function getAmountOutUniswapV2(address fromToken, address toToken, uint fromTokenAmount) external view returns (uint) {
     uint fromTokenReserves;
     uint toTokenReserves;
     if (fromToken == ETH_MOCK_ADDRESS) {
-      fromToken = uniswapRouter.WETH();
+      fromToken = uniswapV2Router.WETH();
     }
     if (toToken == ETH_MOCK_ADDRESS) {
-      toToken = uniswapRouter.WETH();
+      toToken = uniswapV2Router.WETH();
     }
-    (fromTokenReserves, toTokenReserves) = UniswapV2Library.getReserves(UNISWAP_FACTORY_ADDRESS, fromToken, toToken);
+    (fromTokenReserves, toTokenReserves) = UniswapV2Library.getReserves(UNISWAPV2_FACTORY_ADDRESS, fromToken, toToken);
 
     return UniswapV2Library.getAmountOut(fromTokenAmount, fromTokenReserves, toTokenReserves);
   }
 
-  function swapEthForTokenUniswap(address tokenAddress, uint ethAmount) internal returns (uint) {
-    // Verify we have enough funds
-    require(ethAmount <= address(this).balance, "Not enough Eth in contract to perform swap.");
-
+  function swapEthForTokenUniswapV2(address tokenAddress, uint ethAmount) internal returns (uint) {
     // Build arguments for uniswap router call
     address[] memory path = new address[](2);
-    path[0] = uniswapRouter.WETH();
+    path[0] = uniswapV2Router.WETH();
     path[1] = tokenAddress;
 
     // Make the call
-    uint[] memory result = uniswapRouter.swapExactETHForTokens{ value: ethAmount }(0, path, address(this), now);
+    uint[] memory result = uniswapV2Router.swapExactETHForTokens{ value: ethAmount }(0, path, address(this), now);
     return result[1]; // Returns the output amount
   }
 
-  function swapTokenForEthUniswap(address tokenAddress, uint tokenAmount) internal returns (uint) {
-    // Verify we have enough funds
-    ERC20 token = ERC20(tokenAddress);
-    require(tokenAmount <= token.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
-
+  function swapTokenForEthUniswapV2(address tokenAddress, uint tokenAmount) internal returns (uint) {
     // Approve uniswap to manage contract tokens
-    token.approve(address(uniswapRouter), token.balanceOf(address(this)));
+    ERC20 token = ERC20(tokenAddress);
+    token.approve(address(uniswapV2Router), token.balanceOf(address(this)));
 
     // Build arguments for uniswap router call
     address[] memory path = new address[](2);
     path[0] = tokenAddress;
-    path[1] = uniswapRouter.WETH();
+    path[1] = uniswapV2Router.WETH();
 
     // Make the call
-    uint[] memory result = uniswapRouter.swapExactTokensForETH(tokenAmount, 0, path, address(this), now);
+    uint[] memory result = uniswapV2Router.swapExactTokensForETH(tokenAmount, 0, path, address(this), now);
     return result[1]; // Returns the output amount
   }
 
-  function swapTokenForTokenUniswap(address fromTokenAddress, address toTokenAddress, uint tokenAmount) internal returns (uint) {
+  function swapTokenForTokenUniswapV2(address fromTokenAddress, address toTokenAddress, uint tokenAmount) internal returns (uint) {
     if (fromTokenAddress == ETH_MOCK_ADDRESS) {
-      return swapEthForTokenUniswap(toTokenAddress, tokenAmount);
+      return swapEthForTokenUniswapV2(toTokenAddress, tokenAmount);
     }
     
     if (toTokenAddress == ETH_MOCK_ADDRESS) {
-      return swapTokenForEthUniswap(fromTokenAddress, tokenAmount);
+      return swapTokenForEthUniswapV2(fromTokenAddress, tokenAmount);
     }
     
-    // Verify we have enough funds
-    ERC20 fromToken = ERC20(fromTokenAddress);
-    require(tokenAmount <= fromToken.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
-
     // Approve uniswap to manage contract Dai
-    fromToken.approve(address(uniswapRouter), tokenAmount);
+    ERC20 fromToken = ERC20(fromTokenAddress);
+    fromToken.approve(address(uniswapV2Router), tokenAmount);
 
     // Build arguments for uniswap router call
     address[] memory path = new address[](2);
@@ -113,57 +141,40 @@ contract TradeBot is FlashLoanReceiverBase {
     path[0] = toTokenAddress;
 
     // Make the call
-    uint[] memory result = uniswapRouter.swapExactTokensForTokens(tokenAmount, 0, path, address(this), now);
+    uint[] memory result = uniswapV2Router.swapExactTokensForTokens(tokenAmount, 0, path, address(this), now);
     return result[1];    
   }
 
   /*
     Kyber methods
   */
-  function getAmountOutKyber(address fromToken, address toToken, uint fromTokenAmount) external view returns (uint) {
+  function getExpectedRateKyber(address fromToken, address toToken, uint fromTokenAmount) external view returns (uint) {
     uint rate;
     (rate,) = kyberProxy.getExpectedRate(ERC20(fromToken), ERC20(toToken), fromTokenAmount);
-    uint amountOut = fromTokenAmount.mul(rate);
-    return amountOut.div(1000000000000000000);
+    return rate;
   }
 
   function swapEthForTokenKyber(address tokenAddress, uint ethAmount) internal returns (uint) {
-    require(ethAmount <= address(this).balance, "Not enough Eth in contract to perform swap.");
-
     // Declare tokens involved in trade
     ERC20 eth = ERC20(ETH_MOCK_ADDRESS);
     ERC20 token = ERC20(tokenAddress);
-    
-    // Get the conversion rate
-    uint minConversionRate;
-    (minConversionRate, ) = kyberProxy.getExpectedRate(eth, token, ethAmount);
-    require(minConversionRate != 0, "Trade is not possible at the moment.");
 
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
-    return kyberProxy.tradeWithHint{ value: ethAmount }(eth, ethAmount, token, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
+    return kyberProxy.tradeWithHint{ value: ethAmount }(eth, ethAmount, token, address(this), 10**18 * 10**6, 0, address(0), hint);
   }
 
   function swapTokenForEthKyber(address tokenAddress, uint tokenAmount) internal returns (uint) {
     // Verify we have enough funds
     ERC20 eth = ERC20(ETH_MOCK_ADDRESS);
     ERC20 token = ERC20(tokenAddress);
-    require(tokenAmount <= token.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
-
-    // Mitigate ERC20 Approve front-running attack, by initially setting allowance to 0
-    require(token.approve(KYBER_PROXY_ADDRESS, 0), "Failure to approve sender front running attack.");
 
     // Set the spender's token allowance to tokenQty
     require(token.approve(KYBER_PROXY_ADDRESS, tokenAmount), "Failure to approve sender for token amount.");
 
-    // Get the conversion rate
-    uint minConversionRate;
-    (minConversionRate, ) = kyberProxy.getExpectedRate(token, eth, tokenAmount);
-    require(minConversionRate != 0, "Trade is not possible at the moment.");
-
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
-    return kyberProxy.tradeWithHint(token, tokenAmount, eth, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
+    return kyberProxy.tradeWithHint(token, tokenAmount, eth, address(this), 10**18 * 10**6, 0, address(0), hint);
   }
 
   function swapTokenForTokenKyber(address fromTokenAddress, address toTokenAddress, uint tokenAmount) internal returns (uint) {
@@ -178,72 +189,36 @@ contract TradeBot is FlashLoanReceiverBase {
     ERC20 fromToken = ERC20(fromTokenAddress);
     ERC20 toToken = ERC20(toTokenAddress);
 
-    // Verify we have enough funds
-    require(tokenAmount <= fromToken.balanceOf(address(this)), "Not enough tokens in contract to perform swap.");
-
-    // Mitigate ERC20 Approve front-running attack by initially setting allowance to 0
-    require(fromToken.approve(KYBER_PROXY_ADDRESS, 0), "Failure to approve sender front running attack.");
-
     // Set the spender's token allowance to daiAmount
     require(fromToken.approve(KYBER_PROXY_ADDRESS, tokenAmount), "Failure to approve sender for dai amount.");
 
-    // Get the conversion rate
-    uint minConversionRate;
-    (minConversionRate, ) = kyberProxy.getExpectedRate(fromToken, toToken, tokenAmount);
-    require(minConversionRate != 0, "Trade is not possible at the moment.");
-
     // Make the trade. Max amount arbitrarily chosen to be 1 million
     bytes memory hint;
-    return kyberProxy.tradeWithHint(fromToken, tokenAmount, toToken, address(this), 10**18 * 10**6, minConversionRate, address(0), hint);
+    return kyberProxy.tradeWithHint(fromToken, tokenAmount, toToken, address(this), 10**18 * 10**6, 0, address(0), hint);
   }
 
   /*
     Arbitrage methods
   */
-  function arbExecute(address stableCoin, address mediatorCoin, uint amount, string calldata sellDexBuyDex) external onlyOwner {
-    // Serialize the command    
-    bytes memory serializedCommand = abi.encode(mediatorCoin, sellDexBuyDex);
-
-    // Call the flash loan function from Aave
-    lendingPool.flashLoan(address(this), stableCoin, amount, serializedCommand);
-  }
-
-  function executeOperation(address _reserve, uint256 _amount, uint256 _fee, bytes calldata _params) external override {
-    require(_amount <= getBalanceInternal(address(this), _reserve), "Invalid balance, was the flashLoan successful?");
-
-    // Deserialize the parameters
-    address mediatorCoin;
-    string memory sellDexBuyDex;
-    (mediatorCoin, sellDexBuyDex) = abi.decode(_params, (address, string));
-
-    if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_UNI_BUY_KYB")) {
-      arbSellUniswapBuyKyber(_reserve, mediatorCoin, _amount);
-    } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_KYB_BUY_UNI")) {
-      arbSellKyberBuyUniswap(_reserve, mediatorCoin, _amount);
+  function arbExecute(address stableCoin, address mediatorCoin, uint amount, string calldata sellDexBuyDex, uint gasTokenAmount) virtual external onlyOwner {
+    if (gasTokenAmount > 0) {
+      // Burn the gas token
+      require(GasToken(GAS_TOKEN_ADDRESS).freeFromUpTo(msg.sender, gasTokenAmount) > 0, "Failed to free gas token.");
     }
 
-    uint totalDebt = _amount.add(_fee);
-    transferFundsBackToPoolInternal(_reserve, totalDebt);
-  }
-
-  function arbSellUniswapBuyKyber(address tokenAddress, address mediatorAddress, uint tokenAmount) internal {
-    // Sell on Uniswap
-    uint mediatorTokenAmount = swapTokenForTokenUniswap(tokenAddress, mediatorAddress, tokenAmount);
-
-    // Buy on Kyber
-    swapTokenForTokenKyber(mediatorAddress, tokenAddress, mediatorTokenAmount);
-
-    // TODO: Revert if no profit was made
-  }
-
-  function arbSellKyberBuyUniswap(address tokenAddress, address mediatorAddress, uint tokenAmount) internal {
-    // Sell on Kyber
-    uint mediatorTokenAmount = swapTokenForTokenKyber(tokenAddress, mediatorAddress, tokenAmount);
-
-    // Buy on Uniswap
-    swapTokenForTokenUniswap(mediatorAddress, tokenAddress, mediatorTokenAmount);
-
-    // TODO: Revert if no profit was made
+    if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_UV2_BUY_KYB")) {
+      swapTokenForTokenKyber(mediatorCoin, stableCoin, swapTokenForTokenUniswapV2(stableCoin, mediatorCoin, amount));
+    } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_UV2_BUY_UV1")) {
+      swapTokenForTokenUniswapV1(mediatorCoin, stableCoin, swapTokenForTokenUniswapV2(stableCoin, mediatorCoin, amount));
+    } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_KYB_BUY_UV2")) {
+      swapTokenForTokenUniswapV2(mediatorCoin, stableCoin, swapTokenForTokenKyber(stableCoin, mediatorCoin, amount));
+    } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_KYB_BUY_UV1")) {
+      swapTokenForTokenUniswapV1(mediatorCoin, stableCoin, swapTokenForTokenKyber(stableCoin, mediatorCoin, amount));
+    } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_UV1_BUY_UV2")) {
+      swapTokenForTokenUniswapV2(mediatorCoin, stableCoin, swapTokenForTokenUniswapV1(stableCoin, mediatorCoin, amount));
+    } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_UV1_BUY_KYB")) {
+      swapTokenForTokenKyber(mediatorCoin, stableCoin, swapTokenForTokenUniswapV1(stableCoin, mediatorCoin, amount));
+    }
   }
 
   /*
@@ -251,12 +226,6 @@ contract TradeBot is FlashLoanReceiverBase {
   */
   function depositEth() external payable {
     // Nothing to do
-  }
-
-  function depositToken(address tokenAddress, uint tokenAmount) external {
-    ERC20 token = ERC20(tokenAddress);
-    require (tokenAmount <= token.balanceOf(msg.sender), "Deposit amount exceeds holding amount.");
-    token.transferFrom(msg.sender, address(this), tokenAmount);
   }
 
   function withdrawEth() external onlyOwner {
