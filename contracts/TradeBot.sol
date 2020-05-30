@@ -12,12 +12,12 @@ contract TradeBot is Withdrawable {
   /*
     Constants
   */
-  address internal constant UNISWAPV2_FACTORY_ADDRESS = 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f; // Ropsten
-  address internal constant UNISWAPV2_ROUTER_ADDRESS  = 0xf164fC0Ec4E93095b804a4795bBe1e041497b92a; // Ropsten
-  address internal constant UNISWAPV1_FACTORY_ADDRESS = 0xc0a47dFe034B400B47bDaD5FecDa2621de6c4d95;
-  address internal constant KYBER_PROXY_ADDRESS       = 0x818E6FECD516Ecc3849DAf6845e3EC868087B755; // Ropsten
+  address internal constant UNISWAPV2_FACTORY_ADDRESS = 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f; // Mainnet
+  address internal constant UNISWAPV2_ROUTER_ADDRESS  = 0xf164fC0Ec4E93095b804a4795bBe1e041497b92a; // Mainnet
+  address internal constant UNISWAPV1_FACTORY_ADDRESS = 0xc0a47dFe034B400B47bDaD5FecDa2621de6c4d95; // Mainnet
+  address internal constant KYBER_PROXY_ADDRESS       = 0x818E6FECD516Ecc3849DAf6845e3EC868087B755; // Mainnet
+  address internal constant GAS_TOKEN_ADDRESS         = 0x0000000000b3F879cb30FE243b4Dfee438691c04; // Mainnet
   address internal constant ETH_MOCK_ADDRESS          = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-  address internal constant GAS_TOKEN_ADDRESS         = 0x0000000000b3F879cb30FE243b4Dfee438691c04; // Ropsten
   
   /*
     Members
@@ -200,7 +200,7 @@ contract TradeBot is Withdrawable {
   /*
     Arbitrage methods
   */
-  function arbExecute(address stableCoin, address mediatorCoin, uint amount, string calldata sellDexBuyDex, uint gasTokenAmount) virtual external onlyOwner {
+  function arbExecute(address stableCoin, address mediatorCoin, uint amount, string memory sellDexBuyDex, uint gasTokenAmount) virtual public onlyOwner {
     if (gasTokenAmount > 0) {
       // Burn the gas token
       require(GasToken(GAS_TOKEN_ADDRESS).freeFromUpTo(msg.sender, gasTokenAmount) > 0, "Failed to free gas token.");
@@ -231,4 +231,6 @@ contract TradeBot is Withdrawable {
   function withdrawEth() external onlyOwner {
     withdraw(ETHER);
   }
+
+  receive() payable external {}
 }

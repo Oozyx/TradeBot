@@ -8,7 +8,7 @@ contract FlashLoanBot is TradeBot, FlashLoanReceiverBase {
   /*
     Constants
   */
-  address internal constant AAVE_ADDRESSES_PROVIDER   = 0x1c8756FD2B28e9426CDBDcC7E3c4d64fa9A54728; // Ropsten
+  address internal constant AAVE_ADDRESSES_PROVIDER = 0x24a42fD28C976A61Df5D00D0599C34c4f90748c8; // Mainnet
 
   /*
     Members
@@ -23,9 +23,21 @@ contract FlashLoanBot is TradeBot, FlashLoanReceiverBase {
   }
 
   /*
+    Modifiers
+  */
+  modifier onlyLendingPool {
+    require(msg.sender == addressesProvider.getLendingPool(), "Only lending pool can call this function.");
+    _;
+  }
+
+  /*
     Arbitrage methods
   */
-  function arbExecute(address stableCoin, address mediatorCoin, uint amount, string calldata sellDexBuyDex, uint gasTokenAmount) external override onlyOwner {
+  function arbExecuteBase(address stableCoin, address mediatorCoin, uint amount, string calldata sellDexBuyDex, uint gasTokenAmount) external onlyOwner {
+    super.arbExecute(stableCoin, mediatorCoin, amount, sellDexBuyDex, gasTokenAmount);
+  }
+
+  function arbExecute(address stableCoin, address mediatorCoin, uint amount, string memory sellDexBuyDex, uint gasTokenAmount) public override onlyOwner {    
     if (gasTokenAmount > 0) {
       // Burn the gas token
       require(GasToken(GAS_TOKEN_ADDRESS).freeFromUpTo(msg.sender, gasTokenAmount) > 0, "Failed to free gas token.");
@@ -38,7 +50,7 @@ contract FlashLoanBot is TradeBot, FlashLoanReceiverBase {
     lendingPool.flashLoan(address(this), stableCoin, amount, serializedCommand);
   }
 
-  function executeOperation(address _reserve, uint256 _amount, uint256 _fee, bytes calldata _params) external override {
+  function executeOperation(address _reserve, uint256 _amount, uint256 _fee, bytes calldata _params) external override onlyLendingPool {
     require(_amount <= getBalanceInternal(address(this), _reserve), "Invalid balance, was the flashLoan successful?");
 
     // Deserialize the parameters
