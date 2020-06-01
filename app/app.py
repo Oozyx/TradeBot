@@ -86,13 +86,6 @@ def initializeContract():
         with open(os.path.join(appDir, ".contractinfo"), "r") as contractInfo:
             abiSaved = contractInfo.readline().strip("\n")
             addressSaved = contractInfo.readline().strip("\n")
-        
-        # make sure it matches most recent build
-        with open(os.path.join(appDir, "../bin/contracts/TradeBot.abi"), "r") as abiFile:
-            abiBuild = abiFile.read()
-
-        if abiBuild != abiSaved:
-            raise ValueError("Latest contract build does not matched latest deployed. Rebuild contract and delete saved contract info file.")
 
         tradeBot = w3.eth.contract(address=addressSaved, abi=abiSaved)
     else:
@@ -135,13 +128,17 @@ def arbExecuteNoLoan(stableCoinAddress, mediatorCoinAddress, amount, dexOrder, g
     return signAndSendTransaction(tx)
 
 def arbExecute(stableCoinAddress, mediatorCoinAddress, amount, dexOrder, gasTokenAmount, gasLimit, gasPrice):
-    tx = tradeBot.functions.arbExecute(stableCoinAddress, mediatorCoinAddress, amount, dexOrder, gasTokenAmount).buildTransaction({
+    estimatedGas = tradeBot.functions.arbExecute(stableCoinAddress, mediatorCoinAddress, amount, dexOrder, gasTokenAmount).estimateGas({
         "from": w3.eth.defaultAccount.address,
-        "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
-        "gas": gasLimit,
-        "gasPrice": gasPrice,
     })
-    return signAndSendTransaction(tx)
+    if estimatedGas <= gasLimit:
+        tx = tradeBot.functions.arbExecute(stableCoinAddress, mediatorCoinAddress, amount, dexOrder, gasTokenAmount).buildTransaction({
+            "from": w3.eth.defaultAccount.address,
+            "nonce": w3.eth.getTransactionCount(w3.eth.defaultAccount.address),
+            "gas": estimatedGas,
+            "gasPrice": gasPrice,
+        })
+        return signAndSendTransaction(tx)
 
 def getAmountOutUniswapV1(addressFromToken, addressToToken, fromTokenAmount):
     return tradeBot.functions.getAmountOutUniswapV1(addressFromToken, addressToToken, fromTokenAmount).call({
@@ -253,7 +250,7 @@ def updateGasPrice():
     while (True):
         global gasPrice
         tempGasPrice = w3.eth.generateGasPrice()
-        gasPrice = tempGasPrice
+        gasPrice = tempGasPrice + 500000000
         time.sleep(60 * 3)
 
 def main():
@@ -355,5 +352,5 @@ if __name__ == "__main__":
     except ValueError as e:
         print(e)
         exit()
-
+    
     

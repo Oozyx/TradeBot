@@ -65,6 +65,10 @@ contract TradeBot is Withdrawable {
     // Get the exchange
     UniswapExchangeInterface exchange = UniswapExchangeInterface(uniswapV1Factory.getExchange(tokenAddress));
 
+    // Approve the exchange
+    ERC20 token = ERC20(tokenAddress);
+    token.approve(address(exchange), tokenAmount);
+
     // Make the swap
     return exchange.tokenToEthSwapInput(tokenAmount, 1, now);
   }
