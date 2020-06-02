@@ -210,19 +210,23 @@ contract TradeBot is Withdrawable {
       require(GasToken(GAS_TOKEN_ADDRESS).freeFromUpTo(msg.sender, gasTokenAmount) > 0, "Failed to free gas token.");
     }
 
+    uint returnedAmount;
     if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_UV2_BUY_KYB")) {
-      swapTokenForTokenKyber(mediatorCoin, stableCoin, swapTokenForTokenUniswapV2(stableCoin, mediatorCoin, amount));
+      returnedAmount = swapTokenForTokenKyber(mediatorCoin, stableCoin, swapTokenForTokenUniswapV2(stableCoin, mediatorCoin, amount));
     } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_UV2_BUY_UV1")) {
-      swapTokenForTokenUniswapV1(mediatorCoin, stableCoin, swapTokenForTokenUniswapV2(stableCoin, mediatorCoin, amount));
+      returnedAmount = swapTokenForTokenUniswapV1(mediatorCoin, stableCoin, swapTokenForTokenUniswapV2(stableCoin, mediatorCoin, amount));
     } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_KYB_BUY_UV2")) {
-      swapTokenForTokenUniswapV2(mediatorCoin, stableCoin, swapTokenForTokenKyber(stableCoin, mediatorCoin, amount));
+      returnedAmount = swapTokenForTokenUniswapV2(mediatorCoin, stableCoin, swapTokenForTokenKyber(stableCoin, mediatorCoin, amount));
     } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_KYB_BUY_UV1")) {
-      swapTokenForTokenUniswapV1(mediatorCoin, stableCoin, swapTokenForTokenKyber(stableCoin, mediatorCoin, amount));
+      returnedAmount = swapTokenForTokenUniswapV1(mediatorCoin, stableCoin, swapTokenForTokenKyber(stableCoin, mediatorCoin, amount));
     } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_UV1_BUY_UV2")) {
-      swapTokenForTokenUniswapV2(mediatorCoin, stableCoin, swapTokenForTokenUniswapV1(stableCoin, mediatorCoin, amount));
+      returnedAmount = swapTokenForTokenUniswapV2(mediatorCoin, stableCoin, swapTokenForTokenUniswapV1(stableCoin, mediatorCoin, amount));
     } else if (keccak256(bytes(sellDexBuyDex)) == keccak256("SELL_UV1_BUY_KYB")) {
-      swapTokenForTokenKyber(mediatorCoin, stableCoin, swapTokenForTokenUniswapV1(stableCoin, mediatorCoin, amount));
+      returnedAmount = swapTokenForTokenKyber(mediatorCoin, stableCoin, swapTokenForTokenUniswapV1(stableCoin, mediatorCoin, amount));
     }
+
+    // Better to only lose the gas we spent than gas plus loss in trade
+    require(returnedAmount > amount, "Trade was not profitable");
   }
 
   /*
